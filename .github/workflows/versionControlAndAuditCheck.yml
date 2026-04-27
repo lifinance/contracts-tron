@@ -121,7 +121,7 @@ jobs:
 
             ##### Extract version tag from file
             VERSION_TAG=$(grep -E '^/// @custom:version' "$FILE_PATH" | head -1 || true)
-            VERSION=$(echo "$VERSION_TAG" | sed -E 's/^\/\/\/ @custom:version ([0-9]+\.[0-9]+\.[0-9]+).*$/\1/' | tr -d '\n\r' || true)
+            VERSION=$(echo "$VERSION_TAG" | sed -E 's/^\/\/\/ @custom:version ([0-9]+\.[0-9]+\.[0-9]+[^ ]*).*$/\1/' | tr -d '\n\r' || true)
 
             ##### Extract the filename without extension
             FILENAME=$(basename "$FILE_PATH" .sol)
@@ -150,7 +150,7 @@ jobs:
                   echo "Checking if version was updated..."
 
                   OLD_FILE_CONTENT=$(git show "origin/$BASE_REF:${FILE_PATH}" 2>/dev/null || echo "")
-                  OLD_VERSION=$(echo "$OLD_FILE_CONTENT" | grep -E '^/// @custom:version' | sed -E 's/^\/\/\/ @custom:version ([0-9]+\.[0-9]+\.[0-9]+).*$/\1/')
+                  OLD_VERSION=$(echo "$OLD_FILE_CONTENT" | grep -E '^/// @custom:version' | sed -E 's/^\/\/\/ @custom:version ([0-9]+\.[0-9]+\.[0-9]+[^ ]*).*$/\1/')
 
                   # If there was no old version line in the diff, it's a new file.
                   # We set a default old version to ensure the comparison works correctly.
@@ -296,12 +296,13 @@ jobs:
           PR_TITLE_UPDATED: ${{ env.PR_TITLE_UPDATED }}
         run: |
 
-          ##### unset the default git token (does not have sufficient rights to perform the update)
-          unset GITHUB_TOKEN
-          ##### use the Personal Access Token to log into git CLI
-          if ! gh auth login --with-token <<< "$GH_PAT"; then
-            echo -e "\033[31mFailed to authenticate with GitHub. Git action cannot continue\033[0m"
-            exit 1
+          ##### use PAT if available, otherwise fall back to the built-in GITHUB_TOKEN
+          if [[ -n "$GH_PAT" ]]; then
+            unset GITHUB_TOKEN
+            if ! gh auth login --with-token <<< "$GH_PAT"; then
+              echo -e "\033[31mFailed to authenticate with GitHub. Git action cannot continue\033[0m"
+              exit 1
+            fi
           fi
           ##### update the PR title
           if ! gh pr edit ${{ github.event.pull_request.number }} --title "${{ env.PR_TITLE_UPDATED }}"; then
@@ -322,7 +323,7 @@ jobs:
     needs: version-control
     runs-on: ubuntu-latest
     env:
-      GITHUB_TOKEN: ${{ secrets.GIT_ACTIONS_BOT_PAT_CLASSIC }}
+      GITHUB_TOKEN: ${{ secrets.GIT_ACTIONS_BOT_PAT_CLASSIC != '' && secrets.GIT_ACTIONS_BOT_PAT_CLASSIC || secrets.GITHUB_TOKEN }}
       AUDIT_LOG_PATH: 'audit/auditLog.json'
       PR_NUMBER: ${{ github.event.pull_request.number }}
       AUDIT_REQUIRED: false
@@ -342,7 +343,7 @@ jobs:
         uses: actions-ecosystem/action-remove-labels@v1
         continue-on-error: true
         with:
-          github_token: ${{ secrets.GIT_ACTIONS_BOT_PAT_CLASSIC }} # we use the token of the lifi-action-bot so the label protection check will pass
+          github_token: ${{ secrets.GIT_ACTIONS_BOT_PAT_CLASSIC != '' && secrets.GIT_ACTIONS_BOT_PAT_CLASSIC || secrets.GITHUB_TOKEN }} # prefer PAT for label protection; fall back to GITHUB_TOKEN
           labels: 'AuditCompleted'
           number: ${{ env.PR_NUMBER }}
           fail_on_error: false
@@ -466,7 +467,7 @@ jobs:
             echo "-----------"
             echo "now checking file $FILE"
             ##### load contract version
-            VERSION=$(sed -nE 's/^\/\/\/ @custom:version ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' "$FILE" | head -1)
+            VERSION=$(sed -nE 's/^\/\/\/ @custom:version ([0-9]+\.[0-9]+\.[0-9]+[^ ]*).*/\1/p' "$FILE" | head -1)
 
             ##### make sure that contract version was extracted successfully
             if [[ -z $VERSION ]]; then
@@ -667,6 +668,6 @@ jobs:
         uses: actions-ecosystem/action-add-labels@v1
         id: assign_label
         with:
-          github_token: ${{ secrets.GIT_ACTIONS_BOT_PAT_CLASSIC }} # we use the token of the lifi-action-bot so the label protection check will pass
+          github_token: ${{ secrets.GIT_ACTIONS_BOT_PAT_CLASSIC != '' && secrets.GIT_ACTIONS_BOT_PAT_CLASSIC || secrets.GITHUB_TOKEN }} # prefer PAT for label protection; fall back to GITHUB_TOKEN
           labels: 'AuditCompleted'
           number: ${{ env.PR_NUMBER }}
