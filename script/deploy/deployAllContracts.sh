@@ -13,6 +13,7 @@ deployAllContracts() {
   source script/tasks/diamondUpdateFacet.sh
   source script/tasks/diamondUpdatePeriphery.sh
   source script/tasks/updateERC20Proxy.sh
+  source script/tasks/updateFacetConfig.sh
 
   # read function arguments into variables
   local NETWORK="$1"
