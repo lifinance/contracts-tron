@@ -188,6 +188,14 @@ deployAllContracts() {
     checkFailure $? "deploy contract $DIAMOND_CONTRACT_NAME to network $NETWORK"
     echo "[info] <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< $DIAMOND_CONTRACT_NAME successfully deployed"
 
+    # wire DiamondLoupeFacet first; UpdateCoreFacets calls loupe.facetAddresses() and reverts with DiamondLoupeFacetNotFound() if it isn't on the diamond yet
+    echo ""
+    echo ""
+    echo "[info] >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> now wiring DiamondLoupeFacet onto diamond contract"
+    diamondUpdateFacet "$NETWORK" "$ENVIRONMENT" "$DIAMOND_CONTRACT_NAME" "UpdateDiamondLoupeFacet" false
+    checkFailure $? "wire DiamondLoupeFacet on $DIAMOND_CONTRACT_NAME on network $NETWORK"
+    echo "[info] <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< DiamondLoupeFacet wired"
+
     # update diamond with core facets
     echo ""
     echo ""
