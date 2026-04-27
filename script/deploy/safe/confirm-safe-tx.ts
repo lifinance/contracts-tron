@@ -6,6 +6,10 @@
  * and provides options to sign and/or execute them.
  */
 
+import {
+  formatAddressForNetworkCliDisplay,
+  isTronNetworkKey,
+} from '@lifi/tron-devkit'
 import { defineCommand, runMain } from 'citty'
 import { consola } from 'consola'
 import * as dotenv from 'dotenv'
@@ -14,8 +18,6 @@ import { type Account, type Address, type Hex } from 'viem'
 
 import networksData from '../../../config/networks.json'
 import { buildExplorerAddressUrl } from '../../utils/viemScriptHelpers'
-import { isTronNetworkKey } from '../shared/tron-network-keys'
-import { formatAddressForNetworkCliDisplay } from '../tron/helpers/formatAddressForCliDisplay'
 
 import type { ILedgerAccountResult } from './ledger'
 import { reconcileSubmittedSafeTxs } from './reconcile'
@@ -395,8 +397,8 @@ const processTxs = async (
       txNonce === expectedNonce
         ? 'current'
         : txNonce < expectedNonce
-        ? 'stale'
-        : 'future'
+          ? 'stale'
+          : 'future'
 
     consola.info('-'.repeat(80))
     consola.info('Transaction Details:')
@@ -434,8 +436,8 @@ const processTxs = async (
       nonceStatus === 'stale'
         ? ` \u001b[31m✗ STALE — on-chain nonce is ${expectedNonce}, this proposal's nonce was already used\u001b[0m`
         : nonceStatus === 'future' && tx.canExecute
-        ? ` \u001b[33m⚠ on-chain nonce is ${expectedNonce} — cannot execute yet\u001b[0m`
-        : ''
+          ? ` \u001b[33m⚠ on-chain nonce is ${expectedNonce} — cannot execute yet\u001b[0m`
+          : ''
 
     consola.info(`Safe Transaction Details:
     Nonce:           \u001b[${nonceColor}m${
