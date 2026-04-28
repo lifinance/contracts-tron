@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #
 # Deploy smoke test driver.
 #
@@ -20,7 +20,7 @@
 # Requirements: anvil, cast, jq, bun, gum on PATH; a Mongo instance reachable
 # at MONGODB_URI; node_modules populated via `bun install --frozen-lockfile`.
 
-set -o pipefail
+set -euo pipefail
 
 NETWORK=localanvil
 ENVIRONMENT=staging
@@ -45,6 +45,11 @@ fi
 }
 export -f gum
 
-# 3. Drive the real deploy script
+# 3. Drive the real deploy script.
+# deployAllContracts and its helpers handle errors via explicit checkFailure
+# and depend on `VAR=$(fn)` returning non-zero without aborting (e.g. the
+# benign "no Mongo record" path in findContractInMasterLog). Disable -e/-u
+# before invoking so that contract is preserved.
+set +eu
 source script/deploy/deployAllContracts.sh
 deployAllContracts "$NETWORK" "$ENVIRONMENT"
