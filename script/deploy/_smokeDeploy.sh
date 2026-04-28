@@ -1,14 +1,39 @@
 #!/usr/bin/env bash
+#
+# Deploy smoke test driver.
+#
+# Runs the full deployAllContracts pipeline against a local anvil chain so
+# CI can catch regressions in the deploy script (missing sources, broken
+# forge scripts, config drift) before they hit a real network. Designed to
+# be invoked unattended from a workflow:
+#
+#   1. anvil --mnemonic "$MNEMONIC" --silent &
+#   2. bash script/deploy/_smokeDeploy.sh
+#   3. bun script/deploy/healthCheck.ts --network localanvil --environment staging
+#
+# Two workarounds make deployAllContracts runnable without a human:
+#   - gum is stubbed so the start-stage prompt auto-picks "1)" and the script
+#     runs every stage from the top.
+#   - The pauser wallet is pre-funded so stage 9 skips its `read` prompt for
+#     a funding amount.
+#
+# Requirements: anvil, cast, jq, bun, gum on PATH; a Mongo instance reachable
+# at MONGODB_URI; node_modules populated via `bun install --frozen-lockfile`.
+
 set -o pipefail
 
 NETWORK=localanvil
 ENVIRONMENT=staging
 RPC_URL=http://localhost:8545
-ANVIL_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+
+# Load .env so PRIVATE_KEY_ANVIL, MNEMONIC, MONGODB_URI, etc. are available
+# even when the caller didn't pre-source. deployAllContracts.sh re-sources
+# .env on entry, so this is harmless overlap.
+set -a; source .env; set +a
 
 # 1. Pre-fund pauser wallet so stage 9 skips its `read` prompt
 PAUSER=$(jq -r '.pauserWallet' config/global.json)
-cast send --rpc-url "$RPC_URL" --private-key "$ANVIL_KEY" --value 1ether "$PAUSER" >/dev/null
+cast send --rpc-url "$RPC_URL" --private-key "$PRIVATE_KEY_ANVIL" --value 1ether "$PAUSER" >/dev/null
 
 # 2. Mock gum so the stage-selection prompt auto-picks "1)"
 gum() {
