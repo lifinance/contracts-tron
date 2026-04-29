@@ -4,6 +4,7 @@ name: Olympix Static Analysis
 # - detects potential security vulnerabilities and uploads the results to github code scanning
 # - only scans diff (added, renamed, modified) solidity files in src/ instead of the whole repository
 # - ensures security issues are identified before merging, allowing the team to review and discuss findings within the PR
+# - skips files that are identical to upstream lifinance/contracts to avoid re-scanning contracts already reviewed there
 
 on:
   pull_request:
@@ -35,17 +36,41 @@ jobs:
           files: |
             src/**/*.sol
 
-      - name: Convert Changed Files to Args
+      - name: Filter out files identical to upstream (already scanned there)
         if: steps.changed-files.outputs.any_changed == 'true'
-        id: format-args
+        id: tron-files
         env:
           ALL_CHANGED_FILES: ${{ steps.changed-files.outputs.all_changed_files }}
         run: |
-          args=$(echo "$ALL_CHANGED_FILES" | xargs -n 1 printf -- "-p %s ")
+          git remote add upstream https://github.com/lifinance/contracts.git 2>/dev/null || true
+          git fetch upstream main --depth=1 --quiet
+
+          TRON_SPECIFIC=""
+          for file in $ALL_CHANGED_FILES; do
+            if ! git diff --quiet upstream/main HEAD -- "$file"; then
+              TRON_SPECIFIC="$TRON_SPECIFIC $file"
+            fi
+          done
+          TRON_SPECIFIC="${TRON_SPECIFIC# }"
+
+          echo "files=$TRON_SPECIFIC" >> $GITHUB_OUTPUT
+          if [ -n "$TRON_SPECIFIC" ]; then
+            echo "any_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "any_changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Convert Changed Files to Args
+        if: steps.tron-files.outputs.any_changed == 'true'
+        id: format-args
+        env:
+          TRON_SPECIFIC_FILES: ${{ steps.tron-files.outputs.files }}
+        run: |
+          args=$(echo "$TRON_SPECIFIC_FILES" | xargs -n 1 printf -- "-p %s ")
           echo "ARGS=$args" >> $GITHUB_ENV
 
       - name: Run Olympix Integrated Security
-        if: steps.changed-files.outputs.any_changed == 'true'
+        if: steps.tron-files.outputs.any_changed == 'true'
         uses: olympix/integrated-security@79cbce2446c47a8381bef23d09528e9ef08cc066 # main
         env:
           OLYMPIX_API_TOKEN: ${{ secrets.OLYMPIX_API_TOKEN }}
@@ -53,7 +78,7 @@ jobs:
           args: --output-format sarif --output-path ./ ${{ env.ARGS }}
 
       - name: Upload Result to GitHub Code Scanning
-        if: steps.changed-files.outputs.any_changed == 'true'
+        if: steps.tron-files.outputs.any_changed == 'true'
         uses: github/codeql-action/upload-sarif@38b3b7bf288d49ccf58644769dc7a6afdccd05eb # v3
         with:
           sarif_file: olympix.sarif
