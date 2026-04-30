@@ -2,7 +2,7 @@
 pragma solidity ^0.8.17;
 
 import { TestBase, LibSwap } from "../../../utils/TestBase.sol";
-import { UnAuthorized } from "src/Errors/GenericErrors.sol";
+import { UnAuthorized, ETHTransferFailed } from "src/Errors/GenericErrors.sol";
 
 import { ReceiverAcrossV3 } from "lifi/Periphery/ReceiverAcrossV3.sol";
 import { stdJson } from "forge-std/Script.sol";
@@ -80,7 +80,7 @@ contract ReceiverAcrossV3Test is TestBase {
         assertEq(USER_RECEIVER.balance, initialBalance + 1 ether);
     }
 
-    function test_WithdrawTokenWillRevertIfExternalCallFails() public {
+    function testRevert_NativeTransferFailed() public {
         vm.deal(address(receiver), 1 ether);
 
         // deploy contract that cannot receive ETH
@@ -88,7 +88,7 @@ contract ReceiverAcrossV3Test is TestBase {
 
         vm.startPrank(USER_DIAMOND_OWNER);
 
-        vm.expectRevert(abi.encodeWithSignature("ExternalCallFailed()"));
+        vm.expectRevert(ETHTransferFailed.selector);
 
         receiver.withdrawToken(
             address(0),

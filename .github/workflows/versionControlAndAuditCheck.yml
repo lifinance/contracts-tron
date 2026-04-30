@@ -121,7 +121,7 @@ jobs:
 
             ##### Extract version tag from file
             VERSION_TAG=$(grep -E '^/// @custom:version' "$FILE_PATH" | head -1 || true)
-            VERSION=$(echo "$VERSION_TAG" | sed -E 's/^\/\/\/ @custom:version ([0-9]+\.[0-9]+\.[0-9]+).*$/\1/' | tr -d '\n\r' || true)
+            VERSION=$(echo "$VERSION_TAG" | sed -E 's/^\/\/\/ @custom:version ([0-9]+\.[0-9]+\.[0-9]+[^ ]*).*$/\1/' | tr -d '\n\r' || true)
 
             ##### Extract the filename without extension
             FILENAME=$(basename "$FILE_PATH" .sol)
@@ -134,7 +134,7 @@ jobs:
               echo -e "\033[32mFile contains a custom:version tag\033[0m"
 
               ##### Filter relevant code changes (exclude comments, pragma, license, empty lines)
-              DIFF_OUTPUT=$(git diff "origin/$BASE_REF" HEAD -- "$FILE_PATH")
+              DIFF_OUTPUT=$(git diff "origin/${{ github.event.pull_request.base.ref }}" HEAD -- "$FILE_PATH")
               RELEVANT_CHANGES=$(echo "$DIFF_OUTPUT" | grep -E '^[\+\-]' \
                 | grep -vE "^[\+\-][[:space:]]*(//|/\*|pragma)" \
                 | grep -vE '^(\+\+\+|---)' \
@@ -149,8 +149,8 @@ jobs:
                   echo "--------------------"
                   echo "Checking if version was updated..."
 
-                  OLD_FILE_CONTENT=$(git show "origin/$BASE_REF:${FILE_PATH}" 2>/dev/null || echo "")
-                  OLD_VERSION=$(echo "$OLD_FILE_CONTENT" | grep -E '^/// @custom:version' | sed -E 's/^\/\/\/ @custom:version ([0-9]+\.[0-9]+\.[0-9]+).*$/\1/')
+                  OLD_FILE_CONTENT=$(git show "origin/${{ github.event.pull_request.base.ref }}:${FILE_PATH}" 2>/dev/null || echo "")
+                  OLD_VERSION=$(echo "$OLD_FILE_CONTENT" | grep -E '^/// @custom:version' | sed -E 's/^\/\/\/ @custom:version ([0-9]+\.[0-9]+\.[0-9]+[^ ]*).*$/\1/')
 
                   # If there was no old version line in the diff, it's a new file.
                   # We set a default old version to ensure the comparison works correctly.
@@ -466,7 +466,7 @@ jobs:
             echo "-----------"
             echo "now checking file $FILE"
             ##### load contract version
-            VERSION=$(sed -nE 's/^\/\/\/ @custom:version ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' "$FILE" | head -1)
+            VERSION=$(sed -nE 's/^\/\/\/ @custom:version ([0-9]+\.[0-9]+\.[0-9]+[^ ]*).*/\1/p' "$FILE" | head -1)
 
             ##### make sure that contract version was extracted successfully
             if [[ -z $VERSION ]]; then
