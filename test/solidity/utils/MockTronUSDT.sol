@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.17;
 
-/// @notice Reproduces Tron's canonical USDT behaviour: transfer() and transferFrom() update
-///         state correctly but never execute `return true`, so the ABI decoder sees 32 zero
-///         bytes instead of `true`.  SafeTransferLib treats this as a failure and reverts.
+/// @notice Reproduces Tron's canonical USDT behaviour:
+///         - transfer() declares `returns (bool)` but never assigns the return value, so the ABI
+///           decoder sees 32 zero bytes (decoded as `false`). SafeTransferLib reverts on this.
+///         - transferFrom() does NOT declare a return type at all, so it returns 0 bytes.
+///           SafeTransferLib accepts 0-byte returns as success — no bypass needed for transferFrom.
 contract MockTronUSDT {
     string public name = "Tron USD Tether";
     string public symbol = "USDT";
@@ -21,13 +23,20 @@ contract MockTronUSDT {
         totalSupply += amount;
     }
 
-    // Intentionally omits `return true` — mirrors the original Tron USDT bytecode.
-    function transfer(address to, uint256 amount) external {
+    // Declares returns (bool) but never assigns the return variable — mirrors the original Tron USDT
+    // bytecode (~0.4.x) which returns 32 zero bytes instead of `true`.
+    // SafeTransferLib decodes those zero bytes as `false` and reverts, which is the behaviour
+    // the Tron USDT bypass in LibAsset is designed to work around.
+    function transfer(
+        address to,
+        uint256 amount
+    ) external returns (bool) {
         if (balanceOf[msg.sender] < amount) revert InsufficientBalance();
         balanceOf[msg.sender] -= amount;
         balanceOf[to] += amount;
     }
 
+    // No return type declared — mirrors real Tron USDT's transferFrom which returns 0 bytes.
     function transferFrom(
         address from,
         address to,
