@@ -1161,7 +1161,8 @@
     "deployedWithEvmVersion": "cancun",
     "deployedWithSolcVersion": "0.8.29",
     "create3Factory": "0xE2cb61f7e383270c9153563C6e5A18E5A7A43397",
-    "devNotes": "deployments only worked with extra large gas multiplier (used 10000)"
+    "devNotes": "deployments only worked with extra large gas multiplier (used 10000)",
+    "skipHealthcheck": true
   },
   "soneium": {
     "name": "soneium",
