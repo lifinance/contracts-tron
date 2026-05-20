@@ -4,14 +4,18 @@
 # - Triggers: daily cron + manual workflow_dispatch
 # - Key behaviors:
 #     * Mints a short-lived GitHub App token via actions/create-github-app-token.
-#         The App must be added to the bypass list of the `main` branch ruleset so
-#         direct pushes from this workflow are permitted while branch protection
-#         continues to apply to humans.
-#     * Happy path (no merge conflict): merges `upstream/main` into `main` and pushes
-#         the merge commit directly to `main`. No PR, no required-check ceremony.
-#     * Conflict path: aborts the merge and either opens a new `Upstream sync conflict`
-#         issue or comments on the existing open one. A human resolves the conflict
-#         manually (instructions are embedded in the issue body).
+#         The App must be on the `main` branch ruleset's bypass list in `Pull request`
+#         mode so the App can merge sync PRs that don't satisfy review/required-check
+#         rules, without granting it permission to bypass other rules (deletion,
+#         non_fast_forward).
+#     * Happy path (no merge conflict): pushes upstream/main to a `sync/upstream-…`
+#         branch, opens a PR, and immediately merges it via the GitHub merge API.
+#         The merge commit is auto-signed by GitHub's web-flow key, so the
+#         required_signatures rule on `main` is satisfied for real — not bypassed.
+#         The sync branch is deleted after merge to keep the branch list clean.
+#     * Conflict path: opens (or comments on the existing open) `Upstream sync
+#         conflict` issue listing the conflicting files. A human resolves the
+#         conflict manually following the embedded instructions.
 #     * Scheduled runs are gated by repo variable ENABLE_UPSTREAM_SYNC=="true";
 #         manual dispatch always runs.
 # - Required repo configuration:
@@ -19,9 +23,11 @@
 #     * vars.ENABLE_UPSTREAM_SYNC   — "true" to enable scheduled runs
 #     * secrets.SYNC_APP_PRIVATE_KEY — App private key (PEM)
 # - Required App configuration:
-#     * Installed on this repo with `Contents: Read & write`, `Issues: Read & write`,
-#         `Metadata: Read`.
-#     * Added to the `main` branch ruleset bypass list with `Always` bypass mode.
+#     * Installed on this repo with `Contents: Read & write`,
+#         `Pull requests: Read & write`, `Issues: Read & write`, `Metadata: Read`.
+#     * Added to the `main` branch ruleset's bypass list with `Pull request`
+#         bypass mode (narrower than `Always` — the App can merge PRs that don't
+#         satisfy review/check rules, but cannot bypass deletion/non_fast_forward).
 # - Known limitations:
 #     * Conflict resolution requires a human; the workflow only signals via an issue.
 #     * Upstream is assumed to be `https://github.com/lifinance/contracts.git`.
@@ -35,7 +41,7 @@ on:
   workflow_dispatch:
     # Allow manual execution by users with write access.
 
-# Prevent overlapping runs; concurrent pushes to main would race.
+# Prevent overlapping runs; concurrent runs would race on the sync branch / PR.
 concurrency:
   group: sync-upstream-main
   cancel-in-progress: false
@@ -62,10 +68,10 @@ jobs:
       - name: Checkout repository (full history)
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          fetch-depth: 0 # full history needed to merge upstream
+          fetch-depth: 0 # full history needed to test the merge locally
           token: ${{ steps.app-token.outputs.token }}
           # The App token replaces GITHUB_TOKEN in .git/config so subsequent
-          # `git push` calls authenticate as the App (which is in the bypass list).
+          # `git push` calls authenticate as the App.
 
       - name: Configure git identity as the sync App
         env:
@@ -82,12 +88,13 @@ jobs:
           git remote add upstream https://github.com/lifinance/contracts.git
           git fetch upstream main --no-tags
 
-      - name: Merge upstream/main and push (or open conflict issue)
+      - name: Sync via self-merging PR (or open conflict issue)
         env:
           # All ${{ ... }} values flow via env to avoid expansion inside shell
           # (template-injection hardening per repo convention).
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -e
@@ -98,26 +105,20 @@ jobs:
             exit 0
           fi
 
-          ##### Try the merge. --no-ff guarantees a merge commit (preserves upstream SHAs).
-          if git merge --no-ff --no-edit upstream/main \
-              -m "chore(sync): merge upstream/main into main"; then
-            echo -e "\033[32m✅ Merge succeeded; pushing to main\033[0m"
-            git push origin HEAD:main
-            exit 0
-          fi
+          ##### Dry-run the merge to detect conflicts. We do NOT keep this merge
+          # commit — the actual merge is performed on GitHub's side by the merge API
+          # so the resulting commit is auto-signed by web-flow.
+          if ! git merge --no-ff --no-commit --no-edit upstream/main; then
+            CONFLICTS="$(git diff --name-only --diff-filter=U | sort -u)"
+            git merge --abort
+            echo -e "\033[31m❌ Merge conflict detected in:\033[0m"
+            echo "${CONFLICTS}"
 
-          ##### Conflict path — record conflicting files, abort the merge,
-          # and either open a new issue or comment on the existing open one.
-          CONFLICTS="$(git diff --name-only --diff-filter=U | sort -u)"
-          git merge --abort
-          echo -e "\033[31m❌ Merge conflict detected in:\033[0m"
-          echo "${CONFLICTS}"
+            TODAY="$(date -u +%Y-%m-%d)"
+            TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            MANUAL_BRANCH="sync/upstream-${TODAY}-manual"
 
-          TODAY="$(date -u +%Y-%m-%d)"
-          TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          BRANCH="sync/upstream-${TODAY}"
-
-          ISSUE_BODY=$(cat <<EOF
+            ISSUE_BODY=$(cat <<EOF
           ## Conflicts during automated upstream sync
 
           The scheduled \`Sync upstream to main\` workflow detected merge conflicts while merging \`lifinance/contracts:main\` into \`main\`.
@@ -135,38 +136,80 @@ jobs:
 
           \`\`\`bash
           git fetch upstream
-          git checkout -b ${BRANCH} main
+          git checkout -b ${MANUAL_BRANCH} main
           git merge upstream/main
           # resolve conflicts in the files listed above
-          git push origin ${BRANCH}
-          gh pr create --base main --head ${BRANCH} \\
+          git push origin ${MANUAL_BRANCH}
+          gh pr create --base main --head ${MANUAL_BRANCH} \\
             --title "chore(sync): merge upstream into main" \\
             --body "Resolves conflicts from upstream sync issue #<this issue number>."
           \`\`\`
 
           Close this issue once the PR is merged.
           EOF
-          )
+            )
 
-          ##### Avoid spamming: comment on the existing open issue instead of creating a duplicate.
-          EXISTING="$(gh issue list \
-            --repo "${REPO}" \
-            --state open \
-            --search 'Upstream sync conflict in:title' \
-            --json number --jq '.[0].number' || true)"
+            ##### Avoid spamming: comment on the existing open issue instead of creating a duplicate.
+            EXISTING="$(gh issue list \
+              --repo "${REPO}" \
+              --state open \
+              --search 'Upstream sync conflict in:title' \
+              --json number --jq '.[0].number' || true)"
 
-          if [ -n "${EXISTING}" ]; then
-            echo "Updating existing issue #${EXISTING}"
-            gh issue comment "${EXISTING}" \
-              --repo "${REPO}" \
-              --body "${ISSUE_BODY}"
-          else
-            echo "Opening new conflict issue"
-            gh issue create \
-              --repo "${REPO}" \
-              --title "Upstream sync conflict — ${TODAY}" \
-              --body "${ISSUE_BODY}"
+            if [ -n "${EXISTING}" ]; then
+              echo "Updating existing issue #${EXISTING}"
+              gh issue comment "${EXISTING}" \
+                --repo "${REPO}" \
+                --body "${ISSUE_BODY}"
+            else
+              echo "Opening new conflict issue"
+              gh issue create \
+                --repo "${REPO}" \
+                --title "Upstream sync conflict — ${TODAY}" \
+                --body "${ISSUE_BODY}"
+            fi
+
+            ##### Fail the run so the conflict is visible in the Actions UI as well.
+            exit 1
           fi
 
-          ##### Fail the workflow run so the conflict is visible in the Actions UI as well.
-          exit 1
+          ##### No conflict — discard the dry-run merge.
+          git merge --abort
+
+          ##### Happy path: push upstream/main as a sync branch, open PR, merge via API.
+          TODAY="$(date -u +%Y-%m-%d)"
+          BRANCH="sync/upstream-${TODAY}-${RUN_ID}"
+
+          echo "Pushing upstream/main to ${BRANCH}"
+          git push origin "refs/remotes/upstream/main:refs/heads/${BRANCH}"
+
+          PR_BODY=$(cat <<EOF
+          Automated upstream sync from \`lifinance/contracts:main\`.
+
+          This PR is opened and merged by the \`Sync upstream to main\` workflow run ${RUN_URL}.
+
+          The merge commit is created by GitHub's merge API and auto-signed by GitHub's web-flow key, satisfying the \`required_signatures\` rule on \`main\` without bypass. The App's \`Pull request\` mode bypass lets the merge succeed despite the unrelated required-check failures that would otherwise block sync PRs.
+          EOF
+          )
+
+          PR_URL="$(gh pr create \
+            --repo "${REPO}" \
+            --base main \
+            --head "${BRANCH}" \
+            --title "chore(sync): merge upstream/main into main" \
+            --body "${PR_BODY}")"
+          PR_NUMBER="${PR_URL##*/}"
+          echo "Opened PR #${PR_NUMBER}: ${PR_URL}"
+
+          ##### Merge the PR. With Pull request bypass, this succeeds despite
+          # unmet review/check requirements. GitHub creates and signs the merge commit.
+          echo "Merging PR #${PR_NUMBER} via API"
+          gh api -X PUT "/repos/${REPO}/pulls/${PR_NUMBER}/merge" \
+            -f merge_method=merge \
+            -f commit_title="chore(sync): merge upstream/main into main (#${PR_NUMBER})"
+
+          ##### Clean up the sync branch (best-effort; failure is non-fatal).
+          git push origin --delete "${BRANCH}" || \
+            echo "::warning::Could not delete ${BRANCH}; clean up manually"
+
+          echo -e "\033[32m✅ Synced via PR #${PR_NUMBER}\033[0m"
