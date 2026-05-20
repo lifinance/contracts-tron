@@ -1,0 +1,172 @@
+# Upstream Sync (lifinance/contracts -> contracts-tron:main)
+# - Keeps `main` close to `lifinance/contracts:main` so this fork picks up upstream
+#   commits (security patches, CI fixes, lockfile bumps) without manual intervention.
+# - Triggers: daily cron + manual workflow_dispatch
+# - Key behaviors:
+#     * Mints a short-lived GitHub App token via actions/create-github-app-token.
+#         The App must be added to the bypass list of the `main` branch ruleset so
+#         direct pushes from this workflow are permitted while branch protection
+#         continues to apply to humans.
+#     * Happy path (no merge conflict): merges `upstream/main` into `main` and pushes
+#         the merge commit directly to `main`. No PR, no required-check ceremony.
+#     * Conflict path: aborts the merge and either opens a new `Upstream sync conflict`
+#         issue or comments on the existing open one. A human resolves the conflict
+#         manually (instructions are embedded in the issue body).
+#     * Scheduled runs are gated by repo variable ENABLE_UPSTREAM_SYNC=="true";
+#         manual dispatch always runs.
+# - Required repo configuration:
+#     * vars.SYNC_APP_ID            — GitHub App ID (number, as repo variable)
+#     * vars.ENABLE_UPSTREAM_SYNC   — "true" to enable scheduled runs
+#     * secrets.SYNC_APP_PRIVATE_KEY — App private key (PEM)
+# - Required App configuration:
+#     * Installed on this repo with `Contents: Read & write`, `Issues: Read & write`,
+#         `Metadata: Read`.
+#     * Added to the `main` branch ruleset bypass list with `Always` bypass mode.
+# - Known limitations:
+#     * Conflict resolution requires a human; the workflow only signals via an issue.
+#     * Upstream is assumed to be `https://github.com/lifinance/contracts.git`.
+
+name: Sync upstream to main
+
+on:
+  schedule:
+    # Daily at 06:17 UTC. Offbeat minute to avoid the :00 wave.
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+    # Allow manual execution by users with write access.
+
+# Prevent overlapping runs; concurrent pushes to main would race.
+concurrency:
+  group: sync-upstream-main
+  cancel-in-progress: false
+
+permissions:
+  contents: read # default GITHUB_TOKEN only needs read; all writes go through the App token
+
+jobs:
+  sync-upstream:
+    # Scheduled runs gated by variable; manual dispatch always runs.
+    if: github.event_name == 'workflow_dispatch' || vars.ENABLE_UPSTREAM_SYNC == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.SYNC_APP_ID }}
+          private-key: ${{ secrets.SYNC_APP_PRIVATE_KEY }}
+          # Default scope is this repo, with the permissions granted at App install.
+
+      - name: Checkout repository (full history)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0 # full history needed to merge upstream
+          token: ${{ steps.app-token.outputs.token }}
+          # The App token replaces GITHUB_TOKEN in .git/config so subsequent
+          # `git push` calls authenticate as the App (which is in the bypass list).
+
+      - name: Configure git identity as the sync App
+        env:
+          APP_ID: ${{ vars.SYNC_APP_ID }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          ##### Identity must match the App for the bypass list to recognize the push.
+          # The noreply email uses GitHub's `<APP_ID>+<slug>[bot]` convention.
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${APP_ID}+${APP_SLUG}[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote and fetch
+        run: |
+          git remote add upstream https://github.com/lifinance/contracts.git
+          git fetch upstream main --no-tags
+
+      - name: Merge upstream/main and push (or open conflict issue)
+        env:
+          # All ${{ ... }} values flow via env to avoid expansion inside shell
+          # (template-injection hardening per repo convention).
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -e
+
+          ##### Already up-to-date? (upstream/main fully reachable from main)
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo -e "\033[32m✅ main already includes upstream/main; nothing to sync\033[0m"
+            exit 0
+          fi
+
+          ##### Try the merge. --no-ff guarantees a merge commit (preserves upstream SHAs).
+          if git merge --no-ff --no-edit upstream/main \
+              -m "chore(sync): merge upstream/main into main"; then
+            echo -e "\033[32m✅ Merge succeeded; pushing to main\033[0m"
+            git push origin HEAD:main
+            exit 0
+          fi
+
+          ##### Conflict path — record conflicting files, abort the merge,
+          # and either open a new issue or comment on the existing open one.
+          CONFLICTS="$(git diff --name-only --diff-filter=U | sort -u)"
+          git merge --abort
+          echo -e "\033[31m❌ Merge conflict detected in:\033[0m"
+          echo "${CONFLICTS}"
+
+          TODAY="$(date -u +%Y-%m-%d)"
+          TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          BRANCH="sync/upstream-${TODAY}"
+
+          ISSUE_BODY=$(cat <<EOF
+          ## Conflicts during automated upstream sync
+
+          The scheduled \`Sync upstream to main\` workflow detected merge conflicts while merging \`lifinance/contracts:main\` into \`main\`.
+
+          **Detected at:** ${TIMESTAMP}
+          **Workflow run:** ${RUN_URL}
+
+          ### Conflicting files
+
+          \`\`\`
+          ${CONFLICTS}
+          \`\`\`
+
+          ### How to resolve
+
+          \`\`\`bash
+          git fetch upstream
+          git checkout -b ${BRANCH} main
+          git merge upstream/main
+          # resolve conflicts in the files listed above
+          git push origin ${BRANCH}
+          gh pr create --base main --head ${BRANCH} \\
+            --title "chore(sync): merge upstream into main" \\
+            --body "Resolves conflicts from upstream sync issue #<this issue number>."
+          \`\`\`
+
+          Close this issue once the PR is merged.
+          EOF
+          )
+
+          ##### Avoid spamming: comment on the existing open issue instead of creating a duplicate.
+          EXISTING="$(gh issue list \
+            --repo "${REPO}" \
+            --state open \
+            --search 'Upstream sync conflict in:title' \
+            --json number --jq '.[0].number' || true)"
+
+          if [ -n "${EXISTING}" ]; then
+            echo "Updating existing issue #${EXISTING}"
+            gh issue comment "${EXISTING}" \
+              --repo "${REPO}" \
+              --body "${ISSUE_BODY}"
+          else
+            echo "Opening new conflict issue"
+            gh issue create \
+              --repo "${REPO}" \
+              --title "Upstream sync conflict — ${TODAY}" \
+              --body "${ISSUE_BODY}"
+          fi
+
+          ##### Fail the workflow run so the conflict is visible in the Actions UI as well.
+          exit 1
