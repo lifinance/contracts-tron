@@ -5,18 +5,23 @@ import { ILiFi } from "../Interfaces/ILiFi.sol";
 import { LibUtil } from "../Libraries/LibUtil.sol";
 import { LibSwap } from "../Libraries/LibSwap.sol";
 import { LibAllowList } from "../Libraries/LibAllowList.sol";
-import { LibAsset, IERC20 } from "../Libraries/LibAsset.sol";
+import { LibAsset } from "../Libraries/LibAsset.sol";
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { ContractCallNotAllowed, CumulativeSlippageTooHigh, NativeAssetTransferFailed } from "../Errors/GenericErrors.sol";
 
 /// @title GenericSwapFacetV3
 /// @author LI.FI (https://li.fi)
 /// @notice Provides gas-optimized functionality for fee collection and for swapping through any whitelisted DEX
 /// @dev Can only execute calldata for whitelisted function selectors
-/// @custom:version 1.0.2-tron
+/// @custom:version 2.0.0
 contract GenericSwapFacetV3 is ILiFi {
-
     /// Storage
     address public immutable NATIVE_ADDRESS;
+
+    /// @dev Sentinel selector used to whitelist contracts that are approveTo-only targets
+    ///      (i.e. not callable directly, but need allowance set against them).
+    ///      See LibAllowList "Special ApproveTo-Only Selector" documentation.
+    bytes4 private constant APPROVE_TO_ONLY_SELECTOR = 0xffffffff;
 
     /// Constructor
     /// @param _nativeAddress the address of the native token for this network
@@ -154,10 +159,12 @@ contract GenericSwapFacetV3 is ILiFi {
         LibSwap.SwapData calldata _swapData
     ) external payable {
         address callTo = _swapData.callTo;
-        // ensure that contract (callTo) and function selector are whitelisted
+        // ensure that contract (callTo) and function selector are whitelisted as a pair
         if (
-            !(LibAllowList.contractIsAllowed(callTo) &&
-                LibAllowList.selectorIsAllowed(bytes4(_swapData.callData[:4])))
+            !LibAllowList.contractSelectorIsAllowed(
+                callTo,
+                bytes4(_swapData.callData[:4])
+            )
         ) revert ContractCallNotAllowed();
 
         // execute swap
@@ -331,20 +338,36 @@ contract GenericSwapFacetV3 is ILiFi {
             fromAmount
         );
 
-        // ensure that contract (callTo) and function selector are whitelisted
+        // ensure that contract (callTo) and function selector are whitelisted as a pair
         address callTo = _swapData.callTo;
         address approveTo = _swapData.approveTo;
         bytes calldata callData = _swapData.callData;
         if (
-            !(LibAllowList.contractIsAllowed(callTo) &&
-                LibAllowList.selectorIsAllowed(bytes4(callData[:4])))
+            !LibAllowList.contractSelectorIsAllowed(
+                callTo,
+                bytes4(callData[:4])
+            )
         ) revert ContractCallNotAllowed();
 
-        // ensure that approveTo address is also whitelisted if it differs from callTo
-        if (approveTo != callTo && !LibAllowList.contractIsAllowed(approveTo))
-            revert ContractCallNotAllowed();
+        // ensure that approveTo is whitelisted as an approveTo-only target if it differs from callTo
+        if (
+            approveTo != callTo &&
+            !LibAllowList.contractSelectorIsAllowed(
+                approveTo,
+                APPROVE_TO_ONLY_SELECTOR
+            )
+        ) revert ContractCallNotAllowed();
 
-        LibAsset.maxApproveERC20(IERC20(sendingAssetId), approveTo, fromAmount);
+        // set max approval if current allowance is insufficient
+        // uses solady's safeApproveWithRetry under the hood which first
+        // attempts a direct approve(spender, max) and only resets to zero
+        // before retrying if the first call fails (handles USDT-style tokens
+        // that require allowance to be zero before changing)
+        LibAsset.maxApproveERC20(
+            IERC20(sendingAssetId),
+            approveTo,
+            fromAmount
+        );
 
         // execute swap
         // solhint-disable-next-line avoid-low-level-calls
@@ -379,20 +402,23 @@ contract GenericSwapFacetV3 is ILiFi {
             sendingAssetId = currentSwap.sendingAssetId;
             receivingAssetId = currentSwap.receivingAssetId;
 
-            // check if callTo address is whitelisted
+            // check if callTo and selector are whitelisted as a pair
             if (
-                !LibAllowList.contractIsAllowed(currentSwap.callTo) ||
-                !LibAllowList.selectorIsAllowed(
+                !LibAllowList.contractSelectorIsAllowed(
+                    currentSwap.callTo,
                     bytes4(currentSwap.callData[:4])
                 )
             ) {
                 revert ContractCallNotAllowed();
             }
 
-            // if approveTo address is different to callTo, check if it's whitelisted, too
+            // if approveTo differs from callTo, it must be whitelisted as an approveTo-only target
             if (
                 currentSwap.approveTo != currentSwap.callTo &&
-                !LibAllowList.contractIsAllowed(currentSwap.approveTo)
+                !LibAllowList.contractSelectorIsAllowed(
+                    currentSwap.approveTo,
+                    APPROVE_TO_ONLY_SELECTOR
+                )
             ) {
                 revert ContractCallNotAllowed();
             }
@@ -414,6 +440,11 @@ contract GenericSwapFacetV3 is ILiFi {
                     _returnPositiveSlippageNative(_receiver);
             } else {
                 // ERC20
+                // set max approval if current allowance is insufficient
+                // uses solady's safeApproveWithRetry under the hood which first
+                // attempts a direct approve(spender, max) and only resets to zero
+                // before retrying if the first call fails (handles USDT-style tokens
+                // that require allowance to be zero before changing)
                 LibAsset.maxApproveERC20(
                     IERC20(sendingAssetId),
                     currentSwap.approveTo,
@@ -542,7 +573,11 @@ contract GenericSwapFacetV3 is ILiFi {
             // but this 1 wei is not transferable, so the tx reverts. We accept that 1 wei dust gets stuck in the contract
             // with every tx as this does not represent a significant USD value in any relevant token.
             if (sendingAssetBalance > 1) {
-                LibAsset.transferERC20(sendingAssetId, receiver, sendingAssetBalance);
+                LibAsset.transferERC20(
+                    sendingAssetId,
+                    receiver,
+                    sendingAssetBalance
+                );
             }
         }
     }

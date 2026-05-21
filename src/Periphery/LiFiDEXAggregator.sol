@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: UNLICENSED
+
 pragma solidity ^0.8.17;
 
-import { SafeERC20, IERC20Permit } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import { SafeERC20, IERC20, IERC20Permit } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { SafeTransferLib } from "solady/utils/SafeTransferLib.sol";
 import { WithdrawablePeriphery } from "lifi/Helpers/WithdrawablePeriphery.sol";
 import { IVelodromeV2Pool } from "lifi/Interfaces/IVelodromeV2Pool.sol";
@@ -13,7 +14,7 @@ import { IKatanaV3Pool } from "lifi/Interfaces/KatanaV3/IKatanaV3Pool.sol";
 import { IKatanaV3Governance } from "lifi/Interfaces/KatanaV3/IKatanaV3Governance.sol";
 import { IKatanaV3AggregateRouter } from "lifi/Interfaces/KatanaV3/IKatanaV3AggregateRouter.sol";
 import { InvalidConfig, InvalidCallData } from "lifi/Errors/GenericErrors.sol";
-import { LibAsset, IERC20 } from "lifi/Libraries/LibAsset.sol";
+import { LibAsset } from "lifi/Libraries/LibAsset.sol";
 
 address constant NATIVE_ADDRESS = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
 address constant IMPOSSIBLE_POOL_ADDRESS = 0x0000000000000000000000000000000000000001;
@@ -57,8 +58,9 @@ bytes constant KATANA_V3_SWAP_EXACT_IN = hex"00";
 ///         https://github.com/sushiswap/sushiswap/blob/c8c80dec821003eb72eb77c7e0446ddde8ca9e1e/
 ///         protocols/route-processor/contracts/RouteProcessor4.sol)
 /// @notice Processes calldata to swap using various DEXs
-/// @custom:version 1.12.0-tron
+/// @custom:version 1.12.0
 contract LiFiDEXAggregator is WithdrawablePeriphery {
+    using SafeERC20 for IERC20;
     using Approve for IERC20;
     using SafeERC20 for IERC20Permit;
     using InputStream for uint256;
@@ -424,13 +426,12 @@ contract LiFiDEXAggregator is WithdrawablePeriphery {
             if (directionAndFake & 2 == 0)
                 IWETH(wrapToken).deposit{ value: amountIn }();
             if (to != address(this))
-                LibAsset.transferERC20(wrapToken, to, amountIn);
+                IERC20(wrapToken).safeTransfer(to, amountIn);
         } else {
             // unwrap native
             if (directionAndFake & 2 == 0) {
                 if (from == msg.sender)
-                    LibAsset.transferFromERC20(
-                        tokenIn,
+                    IERC20(tokenIn).safeTransferFrom(
                         msg.sender,
                         address(this),
                         amountIn
@@ -459,10 +460,9 @@ contract LiFiDEXAggregator is WithdrawablePeriphery {
             // outside to Bento
             // deposit to arbitrary recipient is possible only from address(BENTO_BOX)
             if (from == address(this))
-                LibAsset.transferERC20(tokenIn, address(BENTO_BOX), amountIn);
+                IERC20(tokenIn).safeTransfer(address(BENTO_BOX), amountIn);
             else if (from == msg.sender)
-                LibAsset.transferFromERC20(
-                    tokenIn,
+                IERC20(tokenIn).safeTransferFrom(
                     msg.sender,
                     address(BENTO_BOX),
                     amountIn
@@ -501,9 +501,9 @@ contract LiFiDEXAggregator is WithdrawablePeriphery {
         uint24 fee = stream.readUint24(); // pool fee in 1/1_000_000
 
         if (from == address(this))
-            LibAsset.transferERC20(tokenIn, pool, amountIn);
+            IERC20(tokenIn).safeTransfer(pool, amountIn);
         else if (from == msg.sender)
-            LibAsset.transferFromERC20(tokenIn, msg.sender, pool, amountIn);
+            IERC20(tokenIn).safeTransferFrom(msg.sender, pool, amountIn);
 
         (uint256 r0, uint256 r1, ) = IUniswapV2Pair(pool).getReserves();
         if (r0 == 0 || r1 == 0) revert WrongPoolReserves();
@@ -566,8 +566,7 @@ contract LiFiDEXAggregator is WithdrawablePeriphery {
         ) revert InvalidCallData();
 
         if (from == msg.sender)
-            LibAsset.transferFromERC20(
-                tokenIn,
+            IERC20(tokenIn).safeTransferFrom(
                 msg.sender,
                 address(this),
                 uint256(amountIn)
@@ -606,7 +605,7 @@ contract LiFiDEXAggregator is WithdrawablePeriphery {
 
         lastCalledPool = IMPOSSIBLE_POOL_ADDRESS;
         address tokenIn = abi.decode(data, (address));
-        LibAsset.transferERC20(tokenIn, msg.sender, uint256(amount));
+        IERC20(tokenIn).safeTransfer(msg.sender, uint256(amount));
     }
 
     /// @notice Called to `msg.sender` after executing a swap via IAlgebraPool#swap.
@@ -786,8 +785,7 @@ contract LiFiDEXAggregator is WithdrawablePeriphery {
         ) revert InvalidCallData();
 
         if (from == msg.sender) {
-            LibAsset.transferFromERC20(
-                tokenIn,
+            IERC20(tokenIn).safeTransferFrom(
                 msg.sender,
                 address(this),
                 amountIn
@@ -854,9 +852,9 @@ contract LiFiDEXAggregator is WithdrawablePeriphery {
         if (isV1Pool && target == address(0)) revert InvalidCallData();
 
         if (from == msg.sender) {
-            LibAsset.transferFromERC20(tokenIn, msg.sender, target, amountIn);
+            IERC20(tokenIn).safeTransferFrom(msg.sender, target, amountIn);
         } else if (from == address(this)) {
-            LibAsset.transferERC20(tokenIn, target, amountIn);
+            IERC20(tokenIn).safeTransfer(target, amountIn);
         }
         // if from is not msg.sender or address(this), it must be INTERNAL_INPUT_SOURCE
         // which means tokens are already in the vault/pool, no transfer needed
@@ -957,7 +955,7 @@ contract LiFiDEXAggregator is WithdrawablePeriphery {
         // It's a security measure to avoid reentrancy or misuse of stale state in future callbacks
         lastCalledPool = IMPOSSIBLE_POOL_ADDRESS;
 
-        LibAsset.transferERC20(tokenIn, msg.sender, amountToPay);
+        IERC20(tokenIn).safeTransfer(msg.sender, amountToPay);
     }
 
     /// @notice Called to `msg.sender` after executing a swap via IiZiSwapPool#swapX2Y
@@ -1101,8 +1099,7 @@ contract LiFiDEXAggregator is WithdrawablePeriphery {
             );
         } else {
             if (from == msg.sender)
-                LibAsset.transferFromERC20(
-                    tokenIn,
+                IERC20(tokenIn).safeTransferFrom(
                     msg.sender,
                     address(this),
                     amountIn
@@ -1131,7 +1128,7 @@ contract LiFiDEXAggregator is WithdrawablePeriphery {
             if (tokenOut == NATIVE_ADDRESS) {
                 SafeTransferLib.safeTransferETH(to, amountOut);
             } else {
-                LibAsset.transferERC20(tokenOut, to, amountOut);
+                IERC20(tokenOut).safeTransfer(to, amountOut);
             }
         }
     }
@@ -1166,9 +1163,9 @@ contract LiFiDEXAggregator is WithdrawablePeriphery {
             amountIn = IERC20(tokenIn).balanceOf(pool) - reserveIn;
         } else {
             if (from == address(this))
-                LibAsset.transferERC20(tokenIn, pool, amountIn);
+                IERC20(tokenIn).safeTransfer(pool, amountIn);
             else if (from == msg.sender)
-                LibAsset.transferFromERC20(tokenIn, msg.sender, pool, amountIn);
+                IERC20(tokenIn).safeTransferFrom(msg.sender, pool, amountIn);
         }
 
         // calculate the expected output amount using the pool's getAmountOut function
@@ -1238,8 +1235,7 @@ contract LiFiDEXAggregator is WithdrawablePeriphery {
         ) revert InvalidCallData();
 
         if (from == msg.sender)
-            LibAsset.transferFromERC20(
-                tokenIn,
+            IERC20(tokenIn).safeTransferFrom(
                 msg.sender,
                 address(this),
                 uint256(amountIn)
