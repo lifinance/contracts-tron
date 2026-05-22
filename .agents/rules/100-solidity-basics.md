@@ -12,6 +12,7 @@ paths:
 ## Licensing ([CONV:LICENSE])
 
 - Our own files: `// SPDX-License-Identifier: LGPL-3.0-only` immediately followed by the pragma statement with no blank line in between.
+- No other comments or directives (including NatSpec) may appear between the SPDX line and `pragma`.
 - External copies retain original license + source note.
 - All contracts must use `pragma solidity ^0.8.17;`.
 - Do not mirror legacy `Unlicense` headers from older test utilities when creating new `.sol` files; new Solidity files in this repo must follow the LGPL+pragma convention above.
@@ -28,8 +29,29 @@ paths:
   - `@author LI.FI (https://li.fi)`
   - `@notice` - must describe what the contract/interface contains and its purpose
   - `@custom:version X.Y.Z`
+- NatSpec must appear directly above the `contract`/`interface` keyword — no blank line between the closing `*/` and the declaration.
 - Public/external functions require NatSpec including params/returns.
 - For pure test/script scaffolding keep headers minimal but retain SPDX/pragma.
+
+## Versioning ([CONV:VERSIONING])
+
+Every deployable contract carries `@custom:version X.Y.Z` (semver). Bump rules:
+
+| Change | Bump |
+|---|---|
+| Removed/renamed function, new revert on existing function, storage layout change, constructor signature change | **MAJOR** (X) |
+| New public/external function, new supported asset or network (e.g. adding Tron USDT bypass to LibAsset) | **MINOR** (Y) |
+| Internal fix with zero behavioral change at the ABI/storage level | **PATCH** (Z) |
+
+**Cascade**: if a library you depend on bumps MAJOR, evaluate whether consumers are affected and bump them accordingly.
+
+**Tron fork overlay** — contracts in this repo that diverge from `main`:
+- Identical to main → keep the same version (e.g. `2.1.3`)
+- Differs from main → append `-tron` suffix (e.g. `2.1.3-tron`)
+- Multiple tron-only iterations while main stays on the same base → add a revision suffix (`2.1.3-tron-r2`, `2.1.3-tron-r3`, …)
+- Never jump ahead of main's version number (e.g. do not use `2.2.0-tron` while main is still at `2.1.3`)
+
+**GenericErrors.sol** is a shared library: bump its `@custom:version` whenever an error is added. Never remove or rename existing errors (selectors are part of the ABI).
 
 ## Blank Lines ([CONV:BLANKLINES])
 

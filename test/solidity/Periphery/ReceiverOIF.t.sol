@@ -5,7 +5,7 @@ pragma solidity ^0.8.17;
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { ReceiverOIF } from "lifi/Periphery/ReceiverOIF.sol";
 import { Executor } from "lifi/Periphery/Executor.sol";
-import { UnAuthorized, InvalidConfig, InvalidReceiver, InvalidAmount } from "lifi/Errors/GenericErrors.sol";
+import { UnAuthorized, InvalidConfig, InvalidReceiver, InvalidAmount, ETHTransferFailed } from "lifi/Errors/GenericErrors.sol";
 import { ERC20Proxy } from "lifi/Periphery/ERC20Proxy.sol";
 import { MandateOutput } from "lifi/Interfaces/IOpenIntentFramework.sol";
 
@@ -103,14 +103,15 @@ contract ReceiverOIFTest is TestBase {
         assertEq(USER_RECEIVER.balance, initialBalance + 1 ether);
     }
 
-    function test_WithdrawTokenWillRevertIfExternalCallFails() public {
+    function testRevert_NativeTransferFailed() public {
         vm.deal(address(receiver), 1 ether);
 
         // deploy contract that cannot receive ETH
         NonETHReceiver nonETHReceiver = new NonETHReceiver();
 
         vm.startPrank(USER_DIAMOND_OWNER);
-        vm.expectRevert(abi.encodeWithSignature("ExternalCallFailed()"));
+
+        vm.expectRevert(ETHTransferFailed.selector);
 
         receiver.withdrawToken(
             address(0),

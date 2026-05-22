@@ -5,6 +5,7 @@ import { TestBase } from "../utils/TestBase.sol";
 import { LibAsset } from "lifi/Libraries/LibAsset.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { InvalidReceiver, NullAddrIsNotAValidSpender, InvalidAmount } from "lifi/Errors/GenericErrors.sol";
+import { MockTronUSDT } from "../utils/MockTronUSDT.sol";
 
 contract LibAssetImplementer {
     function transferAsset(
@@ -40,6 +41,14 @@ contract LibAssetImplementer {
 
     function depositAsset(address assetId, uint256 amount) public {
         LibAsset.depositAsset(assetId, amount);
+    }
+
+    function transferERC20(
+        address assetId,
+        address recipient,
+        uint256 amount
+    ) public {
+        LibAsset.transferERC20(assetId, recipient, amount);
     }
 
     function isContract(address _contractAddr) public view returns (bool) {
@@ -122,6 +131,35 @@ contract LibAssetTest is TestBase {
         result = implementer.isContract(USER_SENDER);
 
         assertEq(result, false);
+    }
+
+    // Tron USDT address (0xa614f803B6FD780986A42c78Ec9c7f77e6DeD13C) and chain ID (728126428)
+    // are duplicated from LibAsset constants which are internal and inaccessible here.
+    address internal constant TRON_USDT_ADDR =
+        0xa614f803B6FD780986A42c78Ec9c7f77e6DeD13C;
+    uint256 internal constant TRON_CHAIN_ID = 728126428;
+
+    function test_SucceedsWhenSendingTronUsdtOnTronChain() public {
+        MockTronUSDT mock = new MockTronUSDT();
+        vm.etch(TRON_USDT_ADDR, address(mock).code);
+        MockTronUSDT(TRON_USDT_ADDR).mint(address(implementer), 1000);
+
+        vm.chainId(TRON_CHAIN_ID);
+
+        implementer.transferERC20(TRON_USDT_ADDR, USER_RECEIVER, 1000);
+
+        assertEq(MockTronUSDT(TRON_USDT_ADDR).balanceOf(USER_RECEIVER), 1000);
+    }
+
+    function testRevert_TronUsdtTransferRevertsOnNonTronChain() public {
+        MockTronUSDT mock = new MockTronUSDT();
+        vm.etch(TRON_USDT_ADDR, address(mock).code);
+        MockTronUSDT(TRON_USDT_ADDR).mint(address(implementer), 1000);
+
+        // Default chain ID is not Tron — safeTransfer will revert because transfer() returns nothing
+        vm.expectRevert();
+
+        implementer.transferERC20(TRON_USDT_ADDR, USER_RECEIVER, 1000);
     }
 
     function test_isContractWithDelegationDesignator() public {
