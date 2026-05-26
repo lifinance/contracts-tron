@@ -179,6 +179,25 @@ describe('buildConstructorArgs', () => {
     expect(args).toEqual(['0x0000000000000000000000000000000000000005'])
   })
 
+  it('uses globalConfig.backendSigner.staging for NEARIntentsFacet (staging env)', () => {
+    const stagingDeps: IBackfillDeps = {
+      ...deps,
+      globalConfig: {
+        ...deps.globalConfig,
+        backendSigner: {
+          production: '0x0000000000000000000000000000000000000005',
+          staging: '0x000000000000000000000000000000000000000e',
+        },
+      },
+    }
+    const args = buildConstructorArgs(
+      'NEARIntentsFacet',
+      stagingDeps,
+      'staging'
+    )
+    expect(args).toEqual(['0x000000000000000000000000000000000000000e'])
+  })
+
   it('uses [metaRouter, gateway] for SymbiosisFacet', () => {
     const args = buildConstructorArgs('SymbiosisFacet', deps)
     expect(args).toEqual([

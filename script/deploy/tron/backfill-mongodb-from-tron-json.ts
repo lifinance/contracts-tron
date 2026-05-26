@@ -34,9 +34,6 @@ import { encodeConstructorArgs, getTronWallet } from './tronUtils'
  * Bundle of all repo configs the backfill needs to reconstruct a deployment record.
  * Passed as a single argument so unit tests can supply fixtures without touching the filesystem.
  */
-// Config fields (globalConfig, networksConfig, allbridgeConfig, ecoConfig,
-// symbiosisConfig, timelockConfig) are unused by buildBackfillRecord in Task 2;
-// Task 3 wires them through to derive constructor args.
 export interface IBackfillDeps {
   globalConfig: Record<string, unknown>
   networksConfig: Record<string, Record<string, unknown>>
@@ -77,7 +74,9 @@ export function buildConstructorArgs(
   const toHex = (raw: string): string => {
     if (raw.startsWith('0x')) return raw
     if (raw.startsWith('T')) return tronAddressToHex(tronWeb, raw)
-    return `0x${raw}`
+    if (raw.startsWith('41') && raw.length === 42)
+      return tronAddressToHex(tronWeb, raw)
+    throw new Error(`toHex: unrecognised address format: ${raw}`)
   }
 
   const wallet = (name: string): string => {
@@ -98,11 +97,23 @@ export function buildConstructorArgs(
     case 'WithdrawFacet':
       return []
 
-    case 'EmergencyPauseFacet':
-      return [toHex(String(g.pauserWallet))]
+    case 'EmergencyPauseFacet': {
+      const raw = g.pauserWallet
+      if (typeof raw !== 'string' || !raw)
+        throw new Error(
+          'globalConfig.pauserWallet missing — cannot build EmergencyPauseFacet args'
+        )
+      return [toHex(raw)]
+    }
 
-    case 'GenericSwapFacetV3':
-      return [toHex(String(tron.nativeAddress))]
+    case 'GenericSwapFacetV3': {
+      const raw = tron.nativeAddress
+      if (typeof raw !== 'string' || !raw)
+        throw new Error(
+          'networks.tron.nativeAddress missing — cannot build GenericSwapFacetV3 args'
+        )
+      return [toHex(raw)]
+    }
 
     case 'LiFiDiamond':
     case 'ERC20Proxy':
