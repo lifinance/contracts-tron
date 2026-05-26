@@ -200,7 +200,7 @@ export async function waitBetweenDeployments(
  * Errors are logged as warnings; the legacy JSON log remains the safety net.
  *
  * @param record - Fully-populated deployment record (already env-resolved).
- * @param environment - 'production' for Tron mainnet, 'staging' for Shasta.
+ * @param environment - Deployment environment ('production' | 'staging') resolved from the current runtime context.
  */
 async function logTronDeploymentToMongoSafe(
   record: Omit<IDeploymentRecord, 'createdAt' | 'updatedAt' | '_id'>,
@@ -221,7 +221,19 @@ async function logTronDeploymentToMongoSafe(
 }
 
 /**
- * Deploy a contract with standard error handling and logging
+ * Deploys a contract via the supplied `TronContractDeployer`, then appends the
+ * deployment to the legacy JSON log and persists it to MongoDB.
+ *
+ * @param deployer - A configured `TronContractDeployer` instance.
+ * @param contractName - Name as it appears in forge artifacts and version NatSpec.
+ * @param constructorArgs - Args passed to the contract constructor (default: none).
+ * @param dryRun - If true, skips on-chain broadcast and all logging side effects.
+ * @param network - The Tron network key (default: `'tron'`).
+ * @returns The deployment result (address, txId, cost, version, status).
+ * @remarks On success, the deployment is also written to MongoDB via
+ *   {@link logTronDeploymentToMongoSafe}. That call is non-throwing — a Mongo
+ *   outage is reported as a warning and does not affect the return value or
+ *   the legacy JSON log.
  */
 export async function deployContractWithLogging(
   deployer: any, // TronContractDeployer
@@ -264,7 +276,6 @@ export async function deployContractWithLogging(
 
       await saveContractAddress(network, contractName, result.contractAddress)
 
-      // Dual-write to MongoDB (non-throwing — see logTronDeploymentToMongoSafe).
       const environment =
         getEnvironment() === EnvironmentEnum.production
           ? 'production'
