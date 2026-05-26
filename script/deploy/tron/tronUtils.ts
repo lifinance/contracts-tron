@@ -44,7 +44,7 @@ import { loadForgeArtifact } from './helpers/loadForgeArtifact'
 import { getCurrentPrices } from './helpers/tronPricing'
 import {
   getTronWebCodecFullHost,
-  getTronWebCodecOnly,
+  getTronWebCodecOnlyOffline,
 } from './helpers/tronWebCodecOnly'
 import { createTronWebReadOnly } from './helpers/tronWebFactory'
 import {
@@ -324,7 +324,9 @@ export async function encodeConstructorArgs(args: any[]): Promise<string> {
   if (args.length === 0) return '0x'
 
   try {
-    const tronWeb = getTronWebCodecOnly()
+    // Use the env-free codec variant: encodeParams is pure math, no network
+    // calls — works in unit tests and dry-run flows without env config.
+    const tronWeb = getTronWebCodecOnlyOffline()
 
     // Determine types based on argument values
     const types: string[] = args.map((arg) => {
@@ -337,9 +339,14 @@ export async function encodeConstructorArgs(args: any[]): Promise<string> {
         return 'uint256'
       else if (typeof arg === 'boolean') return 'bool'
       else if (Array.isArray(arg)) {
-        // For arrays, try to determine the element type
-        if (arg.length > 0 && typeof arg[0] === 'string') return 'string[]'
-
+        // For arrays, infer element type. Apply the same address heuristic
+        // used for scalar strings so address[] is detected correctly.
+        if (arg.length > 0 && typeof arg[0] === 'string') {
+          const first = arg[0]
+          if (first.startsWith('T') || first.startsWith('0x'))
+            return 'address[]'
+          return 'string[]'
+        }
         return 'uint256[]'
       }
       return 'bytes'
