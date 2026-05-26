@@ -72,3 +72,18 @@ export function getTronWebCodecOnlyForNetwork(networkName: string): TronWeb {
 export function getTronWebCodecOnly(): TronWeb {
   return getTronWebCodecOnlyForNetwork(TRON_DEPLOY_NETWORK)
 }
+
+/**
+ * Env-free codec-only TronWeb singleton for address/ABI conversion.
+ * Uses a dummy `fullHost` since base58/hex codec is pure math — no network
+ * calls ever fire from this instance. Use this when the caller needs codec
+ * access but does not have `ETH_NODE_URI_TRON` set (unit tests, one-off
+ * backfill scripts, etc.). Prefer {@link getTronWebCodecOnly} for normal
+ * operational scripts where the env var is expected.
+ */
+let _codecTronWebOffline: TronWeb | undefined
+export function getTronWebCodecOnlyOffline(): TronWeb {
+  if (!_codecTronWebOffline)
+    _codecTronWebOffline = new TronWeb({ fullHost: 'http://localhost' })
+  return _codecTronWebOffline
+}

@@ -23,10 +23,10 @@ import { existsSync, readFileSync } from 'fs'
 
 import { defineCommand, runMain } from 'citty'
 import { consola } from 'consola'
-import { TronWeb } from 'tronweb'
 
 import type { IDeploymentRecord } from '../shared/mongo-log-utils'
 
+import { getTronWebCodecOnlyOffline } from './helpers/tronWebCodecOnly'
 import { tronAddressToHex } from './tronAddressHelpers'
 import { encodeConstructorArgs, getTronWallet } from './tronUtils'
 
@@ -52,17 +52,6 @@ export interface IBackfillDeps {
 const ZERO_HEX = '0x0000000000000000000000000000000000000000'
 
 /**
- * Codec-only TronWeb singleton for address conversion (no network calls needed).
- * Uses a dummy fullHost so no env var is required — base58/hex codec is pure math.
- */
-let _codecTronWeb: TronWeb | undefined
-function getCodecTronWeb(): TronWeb {
-  if (!_codecTronWeb)
-    _codecTronWeb = new TronWeb({ fullHost: 'http://localhost' })
-  return _codecTronWeb
-}
-
-/**
  * Reconstruct the constructor-args array used at deploy time for a single Tron contract.
  * Mirrors the per-contract logic in `script/deploy/tron/deploy-*.ts`.
  *
@@ -81,7 +70,7 @@ export function buildConstructorArgs(
   deps: IBackfillDeps,
   environment: 'production' | 'staging' = 'production'
 ): unknown[] {
-  const tronWeb = getCodecTronWeb()
+  const tronWeb = getTronWebCodecOnlyOffline()
   const tron = deps.networksConfig.tron ?? {}
   const g = deps.globalConfig
 
