@@ -9,11 +9,15 @@ import type { TronWeb } from 'tronweb'
 import { decodeFunctionResult, parseAbi, type Abi, type Hex } from 'viem'
 
 import type { IDeploymentResult, SupportedChain } from '../../common/types'
+import { EnvironmentEnum } from '../../common/types'
 import { sleep } from '../../utils/delay'
 import { spawnAndCapture } from '../../utils/spawnAndCapture'
 import {
   getContractAddress,
+  getEnvironment,
   getFacetSelectors,
+  getFoundryDefaultEvmVersion,
+  getFoundryDefaultSolcVersion,
   logDeployment,
   saveContractAddress,
   updateDiamondJson,
@@ -25,6 +29,7 @@ import {
   ZERO_ADDRESS,
 } from '../shared/constants'
 import { getContractVersion } from '../shared/getContractVersion'
+import type { IDeploymentRecord } from '../shared/mongo-log-utils'
 import { isRateLimitError } from '../shared/rateLimit'
 
 import {
@@ -190,6 +195,32 @@ export async function waitBetweenDeployments(
 }
 
 /**
+ * Writes a deployment record to MongoDB after a successful Tron deploy.
+ * Non-throwing by design: a Mongo outage must not roll back a deployment.
+ * Errors are logged as warnings; the legacy JSON log remains the safety net.
+ *
+ * @param record - Fully-populated deployment record (already env-resolved).
+ * @param environment - 'production' for Tron mainnet, 'staging' for Shasta.
+ */
+async function logTronDeploymentToMongoSafe(
+  record: Omit<IDeploymentRecord, 'createdAt' | 'updatedAt' | '_id'>,
+  environment: keyof typeof EnvironmentEnum
+): Promise<void> {
+  try {
+    const { logDeployment: logToMongo } = await import(
+      '../shared/deployment-logger'
+    )
+    await logToMongo(record, environment, { silent: true })
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error)
+    consola.warn(
+      `MongoDB deployment log failed for ${record.contractName} (${record.network}): ${msg}. ` +
+        `Local JSON log is still authoritative — re-run backfill to sync.`
+    )
+  }
+}
+
+/**
  * Deploy a contract with standard error handling and logging
  */
 export async function deployContractWithLogging(
@@ -232,6 +263,32 @@ export async function deployContractWithLogging(
       )
 
       await saveContractAddress(network, contractName, result.contractAddress)
+
+      // Dual-write to MongoDB (non-throwing — see logTronDeploymentToMongoSafe).
+      const environment =
+        getEnvironment() === EnvironmentEnum.production
+          ? 'production'
+          : 'staging'
+
+      await logTronDeploymentToMongoSafe(
+        {
+          contractName,
+          network,
+          version,
+          address: result.contractAddress,
+          optimizerRuns: '1000000',
+          timestamp: new Date(),
+          constructorArgs: constructorArgsHex,
+          salt: '',
+          verified: false,
+          solcVersion: getFoundryDefaultSolcVersion(),
+          evmVersion: getFoundryDefaultEvmVersion(),
+          zkSolcVersion: '',
+          contractNetworkKey: `${contractName}-${network}`,
+          contractVersionKey: `${contractName}-${version}`,
+        },
+        environment
+      )
     }
 
     return {
