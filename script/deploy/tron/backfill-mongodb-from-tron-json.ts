@@ -3,7 +3,11 @@
  * `deployments/tron.json` + the legacy `_deployments_log_file.json`. Reconstructs
  * constructor args from current repo config (best-effort — see spec).
  *
- * Usage: `bun ./script/deploy/tron/backfill-mongodb-from-tron-json.ts [--dry-run] [--environment <production|staging>]`
+ * Usage: `bun ./script/deploy/tron/backfill-mongodb-from-tron-json.ts [--dryRun] [--environment <production|staging>]`
+ *
+ * NOTE: citty does NOT auto-convert `--dry-run` (kebab) to `args.dryRun`.
+ * Use camel-case `--dryRun` to enter the preview path; the kebab form is
+ * silently ignored and the script writes to MongoDB.
  *
  * Must be invoked via `bun` (not `bunx tsx`) because the shared
  * `getContractVersion` helper relies on `Bun.file()`.
