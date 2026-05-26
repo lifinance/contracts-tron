@@ -9,8 +9,10 @@
  * Use camel-case `--dryRun` to enter the preview path; the kebab form is
  * silently ignored and the script writes to MongoDB.
  *
- * Must be invoked via `bun` (not `bunx tsx`) because the shared
- * `getContractVersion` helper relies on `Bun.file()`.
+ * **Invocation:** Run with `bun`, not the project-default `bunx tsx`.
+ * The shared `getContractVersion` helper uses `Bun.file()`, which is undefined
+ * under tsx's Node-compatible runtime. This is the only script in the repo
+ * that documents this deviation from rule 200-typescript.md.
  *
  * Idempotent: `logDeploymentBatch` upserts on (contractName, network, version, address).
  * Contracts whose source is not present in this repo (e.g. DexManagerFacet) are
@@ -28,6 +30,9 @@ import type { IDeploymentRecord } from '../shared/mongo-log-utils'
  * Bundle of all repo configs the backfill needs to reconstruct a deployment record.
  * Passed as a single argument so unit tests can supply fixtures without touching the filesystem.
  */
+// Config fields (globalConfig, networksConfig, allbridgeConfig, ecoConfig,
+// symbiosisConfig, timelockConfig) are unused by buildBackfillRecord in Task 2;
+// Task 3 wires them through to derive constructor args.
 export interface IBackfillDeps {
   globalConfig: Record<string, unknown>
   networksConfig: Record<string, Record<string, unknown>>
@@ -72,8 +77,8 @@ export async function buildBackfillRecord(
     constructorArgs: '0x',
     salt: '',
     verified: false,
-    solcVersion: '0.8.29',
-    evmVersion: 'cancun',
+    solcVersion: '0.8.29', // from foundry.toml — keep in sync if upgrade
+    evmVersion: 'cancun', // from foundry.toml — keep in sync if upgrade
     zkSolcVersion: '',
     contractNetworkKey: `${contractName}-tron`,
     contractVersionKey: `${contractName}-${version}`,
@@ -122,6 +127,9 @@ async function loadDeps(): Promise<IBackfillDeps> {
     if (!tronData || typeof tronData !== 'object') continue
     const prod = (tronData as Record<string, unknown>).production
     if (!prod || typeof prod !== 'object') continue
+    // Tron contracts have a single version entry in practice, but if a contract
+    // ever has multiple, the picked timestamp depends on JSON insertion order.
+    // Acceptable for a one-off best-effort backfill.
     const versions = Object.values(prod as Record<string, unknown>)
     const firstVersion = versions[0]
     if (!Array.isArray(firstVersion) || firstVersion.length === 0) continue
