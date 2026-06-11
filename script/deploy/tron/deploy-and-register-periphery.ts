@@ -192,11 +192,12 @@ async function deployAndRegisterPeripheryImpl(options: {
       consola.info('3. Deploy FeeCollector')
       consola.info('4. Deploy FeeForwarder')
       consola.info('5. Deploy TokenWrapper')
+      consola.info('6. Deploy OutputValidator')
       consola.info(
-        '6. Deploy LiFiTimelockController (if tron.safeAddress set; not registered with Diamond)'
+        '7. Deploy LiFiTimelockController (if tron.safeAddress set; not registered with Diamond)'
       )
       consola.info(
-        '7. Register periphery contracts with PeripheryRegistryFacet\n'
+        '8. Register periphery contracts with PeripheryRegistryFacet\n'
       )
 
       if (!dryRun) await promptEnergyRentalReminder()
@@ -818,7 +819,99 @@ async function deployAndRegisterPeripheryImpl(options: {
           }
       }
 
-      // 6. Deploy LiFiTimelockController (same phase as EVM Stage 6; not registered with Diamond)
+      // 6. Deploy OutputValidator
+      if (!onlyContracts || onlyContracts.includes('OutputValidator')) {
+        consola.info('\n Deploying OutputValidator...')
+
+        try {
+          const outputValidatorDeployment = await checkExistingDeployment(
+            network,
+            'OutputValidator',
+            dryRun
+          )
+
+          if (
+            outputValidatorDeployment.exists &&
+            outputValidatorDeployment.address &&
+            !outputValidatorDeployment.shouldRedeploy
+          ) {
+            consola.info(
+              `Using existing OutputValidator at: ${outputValidatorDeployment.address}`
+            )
+            deployedContracts['OutputValidator'] =
+              outputValidatorDeployment.address
+
+            const version = await getContractVersion('OutputValidator')
+            deploymentResults.push({
+              contract: 'OutputValidator',
+              address: outputValidatorDeployment.address,
+              txId: 'existing',
+              cost: 0,
+              version,
+            })
+          } else {
+            // Constructor: owner address (deployer)
+            const artifact = await loadForgeArtifact('OutputValidator')
+            const version = await getContractVersion('OutputValidator')
+            const ownerHex = tronAddressToHex(tronWeb, networkInfo.address)
+            const constructorArgs = [ownerHex]
+
+            consola.info(
+              ` Using owner: ${networkInfo.address} (hex: ${ownerHex})`
+            )
+            consola.info(`Version: ${version}`)
+
+            const result = await deployer.deployContract(
+              artifact,
+              constructorArgs
+            )
+
+            deployedContracts['OutputValidator'] = result.contractAddress
+            deploymentResults.push({
+              contract: 'OutputValidator',
+              address: result.contractAddress,
+              txId: result.transactionId,
+              cost: result.actualCost.trxCost,
+              version,
+            })
+
+            consola.success(
+              ` OutputValidator deployed to: ${result.contractAddress}`
+            )
+            consola.info(`Transaction: ${result.transactionId}`)
+            consola.info(`Cost: ${result.actualCost.trxCost} TRX`)
+
+            if (!dryRun) {
+              await logDeployment(
+                'OutputValidator',
+                network,
+                result.contractAddress,
+                version,
+                '0x',
+                false
+              )
+              await saveContractAddress(
+                network,
+                'OutputValidator',
+                result.contractAddress
+              )
+            }
+          }
+
+          if (!dryRun) await sleep(8000)
+        } catch (error: any) {
+          consola.error(` Failed to deploy OutputValidator:`, error.message)
+          deploymentResults.push({
+            contract: 'OutputValidator',
+            address: 'FAILED',
+            txId: 'FAILED',
+            cost: 0,
+            version: '0.0.0',
+          })
+        }
+      }
+
+      // 7. Deploy LiFiTimelockController (same phase as EVM Stage 7; not registered with Diamond)
       if (!onlyContracts || onlyContracts.includes('LiFiTimelockController')) {
         consola.info(
           '\n Deploying LiFiTimelockController (if Safe configured)...'
