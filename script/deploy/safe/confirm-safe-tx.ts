@@ -6,6 +6,10 @@
  * and provides options to sign and/or execute them.
  */
 
+import {
+  formatAddressForNetworkCliDisplay,
+  isTronNetworkKey,
+} from '@lifi/tron-devkit'
 import { defineCommand, runMain } from 'citty'
 import { consola } from 'consola'
 import * as dotenv from 'dotenv'
@@ -14,11 +18,14 @@ import { type Account, type Address, type Hex } from 'viem'
 
 import networksData from '../../../config/networks.json'
 import { buildExplorerAddressUrl } from '../../utils/viemScriptHelpers'
-import { isTronNetworkKey } from '../shared/tron-network-keys'
-import { formatAddressForNetworkCliDisplay } from '../tron/helpers/formatAddressForCliDisplay'
+import { tronHexSuffix } from '../tron/helpers/tronHexSuffix'
 
 import type { ILedgerAccountResult } from './ledger'
-import { reconcileSubmittedSafeTxs } from './reconcile'
+import {
+  reconcileAllSubmittedSafeTxs,
+  reconcileCoverageKey,
+  reconcileSubmittedSafeTxs,
+} from './reconcile'
 import {
   formatDecodedTxDataForDisplay,
   getTargetName,
@@ -61,6 +68,11 @@ const globalTimeoutExecutions: Array<{
   safeTxHash: string
   error: string
 }> = []
+
+// `reconcileCoverageKey` values for each Safe whose `submitted` rows were
+// resolved by the startup reconcile sweep. Used to skip the redundant in-loop
+// reconcile inside processTxs — per Safe, not per network.
+const startupReconciledKeys = new Set<string>()
 
 // Quickfix to allow BigInt printing https://stackoverflow.com/a/70315718
 ;(BigInt.prototype as unknown as Record<string, unknown>).toJSON = function () {
@@ -312,7 +324,12 @@ const processTxs = async (
   // the Safe's ExecutionSuccess/ExecutionFailure logs when a nonce gap is
   // detected. Read-only on-chain — failures are warnings, not throws.
   const networkKey = network.toLowerCase()
-  if (!isTronNetworkKey(network)) {
+  if (
+    !isTronNetworkKey(network) &&
+    !startupReconciledKeys.has(
+      reconcileCoverageKey(networkKey, chain.id, safeAddress)
+    )
+  ) {
     try {
       await reconcileSubmittedSafeTxs(
         pendingTransactions,
@@ -410,10 +427,10 @@ const processTxs = async (
 
     // Get target name for display
     const targetName = await getTargetName(tx.safeTx.data.to, network)
-    const toAddrDisplay = formatAddressForNetworkCliDisplay(
+    const toAddrDisplay = `${formatAddressForNetworkCliDisplay(
       network,
       tx.safeTx.data.to
-    )
+    )}${tronHexSuffix(network, tx.safeTx.data.to)}`
     const toDisplay = targetName
       ? `${toAddrDisplay} \u001b[33m${targetName}\u001b[0m`
       : toAddrDisplay
@@ -422,10 +439,10 @@ const processTxs = async (
       tx.safeTx.data.to
     )
     const toExplorerSuffix = toExplorerUrl ? ` [36m${toExplorerUrl}[0m` : ''
-    const proposerDisplay = formatAddressForNetworkCliDisplay(
+    const proposerDisplay = `${formatAddressForNetworkCliDisplay(
       network,
       tx.proposer
-    )
+    )}${tronHexSuffix(network, tx.proposer)}`
 
     const nonceColor =
       nonceStatus === 'current' ? '32' : nonceStatus === 'stale' ? '31' : '33'
@@ -851,6 +868,23 @@ const main = defineCommand({
       // Connect to MongoDB early to use it for network detection
       const { client: mongoClient, pendingTransactions } =
         await getSafeMongoCollection()
+
+      // Resolve in-flight `submitted` rows across all networks before the
+      // pending-only selection runs. A network whose only row is `submitted`
+      // (no sibling `pending` proposal) is otherwise never reconciled, so its
+      // timelock op is never enqueued for auto-execution. Read-only on-chain.
+      try {
+        const reconciled = await reconcileAllSubmittedSafeTxs(
+          pendingTransactions,
+          args.network
+            ? { network: args.network, rpcUrl: args.rpcUrl }
+            : undefined
+        )
+        reconciled.forEach((k) => startupReconciledKeys.add(k))
+      } catch (error: unknown) {
+        const errorMsg = error instanceof Error ? error.message : String(error)
+        consola.warn(`Startup reconcile sweep failed: ${errorMsg}`)
+      }
 
       // Get signer address early (needed for filtering actionable networks)
       let signerAddress: Address

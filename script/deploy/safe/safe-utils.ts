@@ -9,6 +9,12 @@
 import * as fs from 'fs'
 import * as path from 'path'
 
+import {
+  TronWalletClient,
+  formatAddressForNetworkCliDisplay,
+  getTronNetworkKeyForChainId,
+  isTronTvmChainId,
+} from '@lifi/tron-devkit'
 import { consola } from 'consola'
 import { config } from 'dotenv'
 import { MongoClient, type Collection, type InsertOneResult } from 'mongodb'
@@ -37,18 +43,11 @@ import {
   fetchWithTimeout,
 } from '../../utils/fetchWithTimeout'
 import { normalizeAddressForNetwork } from '../../utils/normalizeAddressStringForViem'
-import { getEnvVar } from '../../utils/utils'
 import {
   buildExplorerContractPageUrl,
   getTransportConfigFromRpcUrl,
   getViemChainForNetworkName,
 } from '../../utils/viemScriptHelpers'
-import { TronWalletClient } from '../tron/helpers/TronWalletClient'
-import { formatAddressForNetworkCliDisplay } from '../tron/helpers/formatAddressForCliDisplay'
-import {
-  getTronNetworkKeyForChainId,
-  isTronTvmChainId,
-} from '../tron/helpers/tronTvmChain'
 
 import { SAFE_SINGLETON_ABI } from './config'
 import { TIMELOCK_SCHEDULE_BATCH_ABI } from './timelock-abi'
@@ -579,9 +578,7 @@ export class SafeClient {
     try {
       // 1) Compute the Safe transaction hash on-chain (via viem client)
       const hash = await this.getTransactionHash(safeTx)
-      consola.info(
-        `[safe-utils] Signing Safe tx hash (ENABLE_SAFE_TX_HASH_SIGNING=true): ${hash}`
-      )
+      consola.info(`[safe-utils] Signing Safe tx hash via eth_sign: ${hash}`)
 
       // 2) Sign the hash using eth_sign-compatible flow
       const sig = await this.signHash(hash)
@@ -601,10 +598,11 @@ export class SafeClient {
   public async signTransaction(
     safeTx: ISafeTransaction
   ): Promise<ISafeTransaction> {
-    // Optional feature flag to switch between EIP-712 signing and hash signing.
-    // If ENABLE_SAFE_TX_HASH_SIGNING === 'true', we sign the Safe tx hash
-    // using eth_sign instead of constructing a large EIP-712 payload.
-    if (getEnvVar('ENABLE_SAFE_TX_HASH_SIGNING') === 'true') {
+    // Optional flag to force tx-hash signing from the start instead of EIP-712
+    // typed data. Read directly from process.env so an unset flag does not
+    // throw — tx-hash signing also runs automatically as a fallback whenever
+    // the EIP-712 path fails.
+    if (process.env.ENABLE_SAFE_TX_HASH_SIGNING === 'true') {
       return this.signTransactionWithHash(safeTx)
     }
 
@@ -668,8 +666,10 @@ export class SafeClient {
       return safeTx
     } catch (error: unknown) {
       const errorMsg = error instanceof Error ? error.message : String(error)
-      console.error('Error signing transaction:', error)
-      throw new Error(`Failed to sign transaction: ${errorMsg}`)
+      consola.warn(
+        `[safe-utils] EIP-712 signing failed, falling back to tx-hash signing. Caught error: ${errorMsg}`
+      )
+      return this.signTransactionWithHash(safeTx)
     }
   }
 
@@ -1376,6 +1376,7 @@ export async function initializeSafeClient(
  */
 export function getPrivateKey(
   keyType:
+    | 'PRIVATE_KEY'
     | 'PRIVATE_KEY_PRODUCTION'
     | 'SAFE_SIGNER_PRIVATE_KEY' = 'PRIVATE_KEY_PRODUCTION',
   privateKeyArg?: string
