@@ -17,9 +17,13 @@
 # - checks include:
 #   - ensuring the audit log contains an entry for all added/modified contracts in their latest version
 #   - ensuring that an audit report has been added at the logged path
-#   - ensuring that the logged audit commit hash is part of the PR's commit list (skipped for revert PRs,
-#     i.e. titles starting with "Revert" or containing "[Revert]", since the audited commit lives in the
-#     reverted PR's history, not the revert PR's)
+#   - ensuring that the logged audit commit hash is part of the PR's commit list. Skipped for:
+#       - revert PRs (titles starting with "Revert" or containing "[Revert]") — the audited commit lives
+#         in the reverted PR's history, not the revert PR's; and
+#       - [fork] upstream-sync PRs (head branch "sync/upstream-*") — upstream squash-merges its PRs, so the
+#         audited feature-branch commit never reaches upstream/main and can never appear in a downstream
+#         sync PR's commit list. See the detailed rationale at the check itself. All other audit-log checks
+#         still run in both cases, so an unaudited contract is still rejected.
 # - assigns label "AuditCompleted" if the audit for each relevant modified contract passed all checks
 # - KNOWN LIMITATIONS
 #   - multiple audits can be registered per contract (in a specific version)
@@ -599,13 +603,14 @@ jobs:
               ##### a revert PR cannot contain the originally audited commit, and the check
               ##### would otherwise make it impossible to revert through the normal PR process
               #####
-              ##### also skipped for upstream-sync PRs (head branch "sync/upstream-*"):
-              ##### upstream (lifinance/contracts) squash-merges its PRs, so the exact commit
-              ##### an auditor reviewed lives only on the upstream PR's feature branch and is
-              ##### discarded by the squash — it never lands on upstream/main and therefore can
-              ##### never be part of a downstream sync PR (only the squashed main-line commit is
-              ##### synced, under a different hash). The audit was already verified upstream while
-              ##### that branch existed; every other audit-log check below still runs.
+              ##### also skipped for upstream-sync PRs (head branch "sync/upstream-*") — [fork]:
+              ##### upstream SQUASH-merges its PRs, so the exact commit an auditor reviewed lives only on
+              ##### the upstream PR's feature branch and is discarded by the squash; it never lands on
+              ##### upstream/main under the same hash and so can never appear in a downstream sync PR's
+              ##### commit list — yet auditLog.json (synced verbatim from upstream) records that original
+              ##### hash. This check would therefore fail on every audited contract a sync pulls in. The
+              ##### audits were already verified upstream; every other audit-log check below still runs.
+              ##### Detection keys on the head branch (from our sync tooling), not the editable PR title.
               if [[ "$PR_TITLE" == Revert* || "$PR_TITLE" == *"[Revert]"* ]]; then
                 echo "PR title indicates a revert PR. Skipping audit commit hash verification for audit $AUDIT_ID."
               elif [[ "$HEAD_REF" == sync/upstream-* ]]; then
