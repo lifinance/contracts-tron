@@ -21,13 +21,14 @@ on:
     - cron: '0 6 * * 1' # weekly, Monday 06:00 UTC
   workflow_dispatch: {} # manual trigger for testing / on-demand syncs
 
-permissions:
-  contents: write # required to push the merge commit / sync branch
-  pull-requests: write # required to open a PR on merge conflicts
+permissions: {} # no default access; each job declares what it needs
 
 jobs:
   sync-upstream:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # required to push the merge commit / sync branch
+      pull-requests: write # required to open a PR on merge conflicts
     steps:
       - name: Generate app token
         id: app-token
