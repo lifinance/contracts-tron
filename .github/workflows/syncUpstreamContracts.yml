@@ -77,7 +77,7 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           DATE=$(date -u +%Y-%m-%d)
-          BRANCH="sync/upstream-${DATE}"
+          BRANCH="sync/upstream-${DATE}-${{ github.run_number }}"
 
           ##### move the current (conflicted) work onto a new branch without
           ##### touching the working tree, then stage the conflict markers as-is
