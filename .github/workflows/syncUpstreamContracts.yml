@@ -12,6 +12,10 @@
 #   rather than merge silently
 name: Sync upstream contracts
 
+concurrency:
+  group: sync-upstream-contracts
+  cancel-in-progress: false
+
 on:
   schedule:
     - cron: '0 6 * * 1' # weekly, Monday 06:00 UTC
