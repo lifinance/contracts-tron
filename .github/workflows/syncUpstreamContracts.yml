@@ -1,8 +1,9 @@
 # Sync upstream contracts
 # - Keeps contracts-tron:main up to date with lifinance/contracts:main (one-way, upstream -> fork)
-# - Clean merge: pushes directly to main as the lifi-contracts-tron-sync GitHub App
-#   (the app is a bypass actor on the "main protection" ruleset, so its own commits
-#   skip PR review + required status checks; see EXSC-587)
+# - Clean merge: pushes directly to main as the lifi-contracts-tron-sync GitHub App.
+#   Requires the app to be added as a bypass actor on the "main protection" ruleset
+#   (manual one-time setup, see EXSC-587) - otherwise this push is rejected and the
+#   job fails.
 # - Conflicting merge: commits the conflict markers to sync/upstream-YYYY-MM-DD and
 #   opens a PR for manual resolution instead
 # - Known limitation: the direct-push path lands without CI having run against that
@@ -55,10 +56,10 @@ jobs:
           echo "upstream_sha=${UPSTREAM_SHA}" >> "$GITHUB_OUTPUT"
 
           if git merge upstream/main --no-edit -m "chore: sync upstream contracts@${UPSTREAM_SHA}"; then
-            echo "\033[32mClean merge, no conflicts\033[0m"
+            echo -e "\033[32mClean merge, no conflicts\033[0m"
             echo "conflict=false" >> "$GITHUB_OUTPUT"
           else
-            echo "\033[31mMerge conflicts detected, will hand off to a PR\033[0m"
+            echo -e "\033[31mMerge conflicts detected, will hand off to a PR\033[0m"
             echo "conflict=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -85,6 +86,6 @@ jobs:
           gh pr create \
             --repo lifinance/contracts-tron \
             --title "chore: sync upstream contracts (${DATE}) - conflicts need resolution" \
-            --body "Automated sync from \`lifinance/contracts@${{ steps.merge.outputs.upstream_sha }}\` hit merge conflicts. Conflict markers are committed as-is on this branch - resolve them manually. See \`.agents/context.md\` sync mechanism section for the sync/versioning rules." \
+            --body "Automated sync from \`lifinance/contracts@${{ steps.merge.outputs.upstream_sha }}\` hit merge conflicts. Conflict markers are committed as-is on this branch - resolve them manually. See the Notion 'Tron deployments' page (section: The contracts-tron Fork) and EXSC-587 for the sync/versioning rules." \
             --base main \
             --head "${BRANCH}"
