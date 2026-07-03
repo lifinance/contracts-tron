@@ -1,0 +1,90 @@
+# Sync upstream contracts
+# - Keeps contracts-tron:main up to date with lifinance/contracts:main (one-way, upstream -> fork)
+# - Clean merge: pushes directly to main as the lifi-contracts-tron-sync GitHub App
+#   (the app is a bypass actor on the "main protection" ruleset, so its own commits
+#   skip PR review + required status checks; see EXSC-587)
+# - Conflicting merge: commits the conflict markers to sync/upstream-YYYY-MM-DD and
+#   opens a PR for manual resolution instead
+# - Known limitation: the direct-push path lands without CI having run against that
+#   commit; acceptable because the fork's delta is small and any upstream change to
+#   the Tron-specific lines (LibAsset.sol, WithdrawablePeriphery.sol) would conflict
+#   rather than merge silently
+name: Sync upstream contracts
+
+on:
+  schedule:
+    - cron: '0 6 * * 1' # weekly, Monday 06:00 UTC
+  workflow_dispatch: {} # manual trigger for testing / on-demand syncs
+
+permissions:
+  contents: write # required to push the merge commit / sync branch
+  pull-requests: write # required to open a PR on merge conflicts
+
+jobs:
+  sync-upstream:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ secrets.TRON_SYNC_APP_ID }}
+          private-key: ${{ secrets.TRON_SYNC_APP_PRIVATE_KEY }}
+
+      - name: Checkout contracts-tron
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          fetch-depth: 0
+          ref: main
+
+      - name: Configure git identity
+        run: |
+          git config user.name "lifi-contracts-tron-sync[bot]"
+          git config user.email "lifi-contracts-tron-sync[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream lifinance/contracts
+        run: |
+          git remote add upstream https://github.com/lifinance/contracts.git
+          git fetch upstream main
+
+      - name: Attempt merge
+        id: merge
+        run: |
+          UPSTREAM_SHA=$(git rev-parse --short upstream/main)
+          echo "upstream_sha=${UPSTREAM_SHA}" >> "$GITHUB_OUTPUT"
+
+          if git merge upstream/main --no-edit -m "chore: sync upstream contracts@${UPSTREAM_SHA}"; then
+            echo "\033[32mClean merge, no conflicts\033[0m"
+            echo "conflict=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "\033[31mMerge conflicts detected, will hand off to a PR\033[0m"
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push directly to main
+        if: steps.merge.outputs.conflict == 'false'
+        run: git push origin main
+
+      - name: Commit conflicts and open PR
+        if: steps.merge.outputs.conflict == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          DATE=$(date -u +%Y-%m-%d)
+          BRANCH="sync/upstream-${DATE}"
+
+          ##### move the current (conflicted) work onto a new branch without
+          ##### touching the working tree, then stage the conflict markers as-is
+          git branch "${BRANCH}"
+          git symbolic-ref HEAD "refs/heads/${BRANCH}"
+          git add -A
+          git commit -m "chore: sync upstream contracts@${{ steps.merge.outputs.upstream_sha }} (conflicts - manual resolution required)"
+          git push origin "${BRANCH}"
+
+          gh pr create \
+            --repo lifinance/contracts-tron \
+            --title "chore: sync upstream contracts (${DATE}) - conflicts need resolution" \
+            --body "Automated sync from \`lifinance/contracts@${{ steps.merge.outputs.upstream_sha }}\` hit merge conflicts. Conflict markers are committed as-is on this branch - resolve them manually. See \`.agents/context.md\` sync mechanism section for the sync/versioning rules." \
+            --base main \
+            --head "${BRANCH}"
