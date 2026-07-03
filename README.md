@@ -1,6 +1,10 @@
 [![Forge](https://github.com/lifinance/contracts/actions/workflows/forge-unit-tests.yml/badge.svg)](https://github.com/lifinance/contracts/actions/workflows/forge-unit-tests.yml)
 
-# LI.FI Smart Contracts
+# LI.FI Smart Contracts — Tron Fork
+
+> **This is a fork of [`lifinance/contracts`](https://github.com/lifinance/contracts), used exclusively to deploy to Tron.**
+> It carries a small, deliberate delta on top of upstream `main` (a USDT-safe token-transfer bypass) and never pushes changes back.
+> **Never develop features here** — all feature work starts in `lifinance/contracts`. See [`docs/TronFork.md`](./docs/TronFork.md) for why this fork exists, what differs, how it stays in sync, and how to deploy to Tron.
 
 You can find the ABI of LifiDiamond in our auto generated [lifi-contract-types repository](https://github.com/lifinance/lifi-contract-types/blob/main/dist/diamond.json).
 
@@ -278,6 +282,7 @@ For detailed guidelines and requirements, please refer to [conventions.md](./con
 - [Internal Documentation](./docs/README.md)
 - [Coding Conventions](./conventions.md)
 - [Deployment Guide](./docs/Deploy.md)
+- [Tron Fork — why it exists, sync process, and how to deploy to Tron](./docs/TronFork.md)
 
 ```
 
