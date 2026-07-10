@@ -5,14 +5,14 @@ pragma solidity ^0.8.17;
 import { WithdrawablePeriphery } from "lifi/Helpers/WithdrawablePeriphery.sol";
 import { ZeroAmount, ETHTransferFailed } from "lifi/Errors/GenericErrors.sol";
 
-import { TestBase } from "../utils/TestBase.sol";
+import { TestBaseLocal } from "../utils/TestBaseLocal.sol";
 import { NonETHReceiver } from "../utils/TestHelpers.sol";
 
 contract TestContract is WithdrawablePeriphery {
     constructor(address _owner) WithdrawablePeriphery(_owner) {}
 }
 
-contract WithdrawablePeripheryTest is TestBase {
+contract WithdrawablePeripheryTest is TestBaseLocal {
     WithdrawablePeriphery internal withdrawable;
 
     event TokensWithdrawn(
@@ -24,7 +24,7 @@ contract WithdrawablePeripheryTest is TestBase {
     error UnAuthorized();
 
     function setUp() public {
-        initTestBase();
+        initTestBaseLocal();
 
         // deploy contract
         withdrawable = new TestContract(USER_DIAMOND_OWNER);

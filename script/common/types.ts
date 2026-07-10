@@ -95,6 +95,18 @@ export interface INetwork {
    * are correct; this flag only allows CI to pass.
    */
   skipHealthcheck?: boolean
+  /**
+   * Chains with no native currency (`nativeCurrency: "N/A"`, e.g. tempo): the ERC20 token gas is
+   * paid in by default (tempo: the pathUSD TIP-20 predeploy). Funding audits read this token's
+   * balance instead of eth_getBalance, which returns a meaningless sentinel on such chains.
+   */
+  feeTokenAddress?: string
+  /**
+   * Optional companion to `feeTokenAddress`: a fee-preference manager exposing
+   * `userTokens(address)` (tempo: the FeeManager predeploy). A non-zero per-account preference
+   * overrides `feeTokenAddress` as the token that account pays gas with.
+   */
+  feeManagerAddress?: string
 }
 
 /** Parsed subset of `foundry.toml` used by script helpers that read default compiler/EVM settings. */
@@ -103,6 +115,7 @@ export interface IFoundryTomlConfig {
     default?: {
       solc_version?: string
       evm_version?: string
+      optimizer_runs?: number
     }
   }
 }
@@ -185,8 +198,13 @@ export interface IChainExecutionParams {
 export interface IChainExecutionResult {
   /** Transaction hash (always 0x-prefixed hex). */
   hash: Hex
-  /** On-chain receipt, if the chain supports synchronous confirmation. */
-  receipt?: TransactionReceipt
+  /**
+   * Normalized on-chain outcome once confirmed. `undefined` means the outcome
+   * is still unknown (EVM receipt poll timed out) — the caller leaves the row
+   * `submitted` for reconciliation to resolve. Tron has no reconciliation, so
+   * its executor resolves this synchronously before returning.
+   */
+  status?: 'success' | 'reverted'
   /** Human-readable explorer URL for CLI display (e.g. TronScan). */
   explorerUrl?: string
   /** Formatted hash for CLI display (e.g. Tron strips 0x prefix). Falls back to `hash`. */

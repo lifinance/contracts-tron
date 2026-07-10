@@ -5763,12 +5763,17 @@ function removeNetworkFromTargetStateJSON() {
 # production LiFiDiamond on NETWORK. EVM only; optional PAUSER_ADDRESS overrides the --from
 # (defaults to config/global.json .pauserWallet).
 # Exit: 0 = cost on stdout · 2 = diamond already paused · 1 = any other failure (reason on stderr).
+# A cost of 0 with exit 0 unambiguously means the chain's gas PRICE is 0 (free gas, e.g. nibiru);
+# a zero gas ESTIMATE is rejected as an RPC anomaly (exit 1), never folded into a zero cost.
 function estimatePauseCost() {
   local NETWORK="${1:-}"
   local PAUSER_ADDRESS="${2:-}"
-  # DiamondIsPaused() selector; matched in cast's revert output (cast lacks the ABI here,
-  # so it surfaces the raw selector rather than the decoded name).
+  # Selectors matched in cast's revert output (cast lacks the ABI, so it surfaces raw selectors).
+  # DiamondIsPaused(): reverts from the fallback when any non-EmergencyPauseFacet selector is called
+  # on a paused diamond. NoFacetToPause(): reverts from pauseDiamond() itself when the diamond is
+  # already paused (all facets already point to EmergencyPauseFacet, so there is nothing left to remap).
   local PAUSED_SELECTOR="0x0149422e"
+  local NO_FACET_TO_PAUSE_SELECTOR="0x8bce42e7"
 
   if [[ -z "$NETWORK" ]]; then
     error "estimatePauseCost: NETWORK argument is required" >&2
@@ -5824,7 +5829,7 @@ function estimatePauseCost() {
     fi
     CAST_ERR=$(cat "$GAS_ESTIMATE_ERR")
     # Definitive (not transient): diamond already paused — do not retry.
-    if [[ "$CAST_ERR" == *"$PAUSED_SELECTOR"* || "$CAST_ERR" == *"DiamondIsPaused"* ]]; then
+    if [[ "$CAST_ERR" == *"$PAUSED_SELECTOR"* || "$CAST_ERR" == *"DiamondIsPaused"* || "$CAST_ERR" == *"$NO_FACET_TO_PAUSE_SELECTOR"* || "$CAST_ERR" == *"NoFacetToPause"* ]]; then
       return 2
     fi
     if [[ $ATTEMPT -ge $ESTIMATE_MAX_ATTEMPTS ]]; then
@@ -5834,6 +5839,13 @@ function estimatePauseCost() {
     sleep "$ESTIMATE_RETRY_SLEEP_SECONDS"
     ATTEMPT=$((ATTEMPT + 1))
   done
+
+  # Intrinsic tx gas alone is 21000, so a zero gas ESTIMATE can only be an RPC anomaly. Reject it
+  # here so a returned cost of 0 can only mean "gas price is 0" (free-gas chain) to callers.
+  if [[ "$GAS_ESTIMATE" -eq 0 ]]; then
+    error "estimatePauseCost: RPC returned a zero gas estimate for $NETWORK (implausible; treating as failure)" >&2
+    return 1
+  fi
 
   local GAS_PRICE
   ATTEMPT=1

@@ -23,6 +23,10 @@ import { tronHexSuffix } from '../tron/helpers/tronHexSuffix'
 
 import type { ILedgerAccountResult } from './ledger'
 import {
+  LEDGER_FLEX_WRAP_NOTE,
+  renderLedgerFlexFlow,
+} from './ledger-flex-preview'
+import {
   reconcileAllSubmittedSafeTxs,
   reconcileCoverageKey,
   reconcileSubmittedSafeTxs,
@@ -45,6 +49,7 @@ import {
   isSignedByProductionWallet,
   mongoSafeTxRowFilter,
   PrivateKeyTypeEnum,
+  safeTxStatusConsumedNonce,
   serializeSafeTxForMongo,
   shouldShowSignAndExecuteWithDeployer,
   wouldMeetThreshold,
@@ -199,9 +204,13 @@ const processTxs = async (
    * @param txDoc - The pendingTransactions row being processed
    * @param safeClient - The Safe client to use for execution (defaults to main safe client)
    */
-  // Returns true if the Safe nonce was consumed on-chain (executed or
-  // reverted with valid signatures). Returns false when the outcome is
-  // unknown ('submitted') — the caller should not advance expectedNonce.
+  // Returns true only for the 'executed' status (receipt success, or the Tron
+  // no-receipt path) — the only outcome that consumes the Safe nonce. A
+  // top-level revert rolls back the nonce increment, so 'reverted' did NOT
+  // consume the nonce (in this repo safeTxGas=0 is why an inner-call failure
+  // surfaces as a top-level revert (GS013) rather than ExecutionFailure). Both
+  // 'reverted' and the unknown 'submitted' outcome return false, and the caller
+  // must not advance expectedNonce in either case.
   async function executeTransaction(
     safeTransaction: ISafeTransaction,
     txDoc: ISafeTxMongoDocument,
@@ -221,17 +230,15 @@ const processTxs = async (
 
       consola.success(`✅ Transaction submitted successfully`)
 
-      // Resolve the DB status from on-chain reality. With safeTxGas=0 the
-      // Safe reverts whenever the inner call reverts, so receipt.status is
-      // the authoritative signal — no need to also parse ExecutionSuccess.
+      // Resolve the DB status from on-chain reality. With safeTxGas=0 the Safe
+      // reverts whenever the inner call reverts, so the executor's normalized
+      // status is authoritative (EVM resolves it from the receipt, Tron
+      // synchronously via getTransactionInfo). An undefined status means the
+      // outcome is unknown (EVM receipt poll timed out) — leave the row
+      // 'submitted' for reconciliation to resolve.
       let nextStatus: SafeTxStatus
-      if (exec.receipt)
-        nextStatus = exec.receipt.status === 'success' ? 'executed' : 'reverted'
-      else if (isTronNetworkKey(network))
-        // Tron lacks synchronous receipts; preserve existing behavior and
-        // mark executed when a hash is returned. Reconciliation does not
-        // currently cover Tron.
-        nextStatus = 'executed'
+      if (exec.status)
+        nextStatus = exec.status === 'success' ? 'executed' : 'reverted'
       else nextStatus = 'submitted'
 
       await pendingTransactions.updateOne(
@@ -268,7 +275,7 @@ const processTxs = async (
           `❌ Safe transaction reverted on-chain — recorded as reverted`
         )
         consola.error(
-          `   On-chain nonce has advanced; inspect the receipt for the revert reason.`
+          `   The Safe nonce was NOT consumed — the execTransaction reverted, rolling back the nonce increment, so this nonce can be re-proposed. Inspect the receipt for the revert reason.`
         )
         globalFailedExecutions.push({
           chain: chain.name,
@@ -299,7 +306,7 @@ const processTxs = async (
       )
       consola.log(' ')
 
-      return nextStatus === 'executed' || nextStatus === 'reverted'
+      return safeTxStatusConsumedNonce(nextStatus)
     } catch (error: unknown) {
       const errorMsg = error instanceof Error ? error.message : String(error)
       consola.error('❌ Error executing Safe transaction:')
@@ -487,22 +494,50 @@ const processTxs = async (
         ? ` \u001b[33m⚠ on-chain nonce is ${expectedNonce} — cannot execute yet\u001b[0m`
         : ''
 
-    consola.info(`Safe Transaction Details:
-    Nonce:           \u001b[${nonceColor}m${
-      tx.safeTx.data.nonce
-    }\u001b[0m${nonceWarning}
-    To:              \u001b[32m${toDisplay}${toExplorerSuffix}\u001b[0m
-    Value:           \u001b[32m${tx.safeTx.data.value}\u001b[0m
-    Operation:       \u001b[32m${
-      tx.safeTx.data.operation === 0 ? 'Call' : 'DelegateCall'
-    }\u001b[0m
-    Data:            \u001b[32m${tx.safeTx.data.data}\u001b[0m
-    Proposer:        \u001b[32m${proposerDisplay}\u001b[0m
-    Safe Tx Hash:    \u001b[36m${tx.safeTxHash}\u001b[0m
-    Signatures:      \u001b[32m${tx.safeTransaction.signatures.size}/${
-      tx.threshold
-    }\u001b[0m required
-    Execution Ready: \u001b[${tx.canExecute ? '32m✓' : '31m✗'}\u001b[0m`)
+    const detailLines = [
+      'Safe Transaction Details:',
+      `    Nonce:           \u001b[${nonceColor}m${tx.safeTx.data.nonce}\u001b[0m${nonceWarning}`,
+      `    To:              \u001b[32m${toDisplay}${toExplorerSuffix}\u001b[0m`,
+      `    Value:           \u001b[32m${tx.safeTx.data.value}\u001b[0m`,
+      `    Operation:       \u001b[32m${
+        tx.safeTx.data.operation === 0 ? 'Call' : 'DelegateCall'
+      }\u001b[0m`,
+      `    Data:            \u001b[32m${tx.safeTx.data.data}\u001b[0m`,
+      `    Proposer:        \u001b[32m${proposerDisplay}\u001b[0m`,
+      `    Safe Tx Hash:    \u001b[36m${tx.safeTxHash}\u001b[0m`,
+      `    Signatures:      \u001b[32m${tx.safeTransaction.signatures.size}/${tx.threshold}\u001b[0m required`,
+      `    Execution Ready: \u001b[${tx.canExecute ? '32m✓' : '31m✗'}\u001b[0m`,
+    ]
+
+    consola.info(detailLines.join('\n'))
+
+    // Ledger Flex signing filmstrip: reproduce the on-device screens the
+    // signer steps through so values can be compared screen-by-screen. EVM
+    // only — the Flex EIP-712 blind-signing flow does not apply to Tron.
+    // A display error must never block signing.
+    if (
+      !isTronNetworkKey(network) &&
+      tx.safeTx.data.data &&
+      tx.safeTx.data.data !== '0x'
+    )
+      try {
+        const filmstrip = renderLedgerFlexFlow({
+          chainId: chain.id,
+          verifyingContract: safeAddress,
+          to: tx.safeTx.data.to,
+          value: String(tx.safeTx.data.value),
+          data: tx.safeTx.data.data as Hex,
+        })
+        consola.info(
+          [
+            'Ledger Flex — verify these screens against your device (screens 5–8 are gas params / nonce, not security-relevant):',
+            ...filmstrip,
+            LEDGER_FLEX_WRAP_NOTE,
+          ].join('\n')
+        )
+      } catch (error) {
+        consola.debug(`Ledger Flex filmstrip skipped: ${error}`)
+      }
 
     const storedResponse = tx.safeTx.data.data
       ? storedResponses[tx.safeTx.data.data]
@@ -850,7 +885,7 @@ const main = defineCommand({
 
     // Create ledger connection once if using ledger
     let ledgerResult: ILedgerAccountResult | undefined
-    if (useLedger)
+    if (useLedger) {
       try {
         const { getLedgerAccount } = await import('./ledger')
         ledgerResult = await getLedgerAccount(ledgerOptions)
@@ -860,6 +895,20 @@ const main = defineCommand({
         consola.error(`Failed to connect to Ledger: ${errorMsg}`)
         throw error
       }
+
+      // Signing a Safe EIP-712 payload on a Ledger Flex needs blind signing on.
+      // Fail fast with enable instructions rather than dying mid-sign.
+      const { checkBlindSigningEnabled, closeLedgerConnection } = await import(
+        './ledger'
+      )
+      if (
+        ledgerResult &&
+        !(await checkBlindSigningEnabled(ledgerResult.transport))
+      ) {
+        await closeLedgerConnection(ledgerResult.transport)
+        process.exit(1)
+      }
+    }
 
     try {
       // Connect to MongoDB early to use it for network detection
