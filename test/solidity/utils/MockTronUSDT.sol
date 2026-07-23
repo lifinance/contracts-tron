@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: UNLICENSED
+// SPDX-License-Identifier: LGPL-3.0-only
 pragma solidity ^0.8.17;
 
 /// @notice Reproduces Tron's canonical USDT behaviour:
@@ -27,22 +27,16 @@ contract MockTronUSDT {
     // bytecode (~0.4.x) which returns 32 zero bytes instead of `true`.
     // SafeTransferLib decodes those zero bytes as `false` and reverts, which is the behaviour
     // the Tron USDT bypass in LibAsset is designed to work around.
-    function transfer(
-        address to,
-        uint256 amount
-    ) external returns (bool) {
+    function transfer(address to, uint256 amount) external returns (bool) {
         if (balanceOf[msg.sender] < amount) revert InsufficientBalance();
         balanceOf[msg.sender] -= amount;
         balanceOf[to] += amount;
     }
 
     // No return type declared — mirrors real Tron USDT's transferFrom which returns 0 bytes.
-    function transferFrom(
-        address from,
-        address to,
-        uint256 amount
-    ) external {
-        if (allowance[from][msg.sender] < amount) revert InsufficientAllowance();
+    function transferFrom(address from, address to, uint256 amount) external {
+        if (allowance[from][msg.sender] < amount)
+            revert InsufficientAllowance();
         if (balanceOf[from] < amount) revert InsufficientBalance();
         allowance[from][msg.sender] -= amount;
         balanceOf[from] -= amount;
