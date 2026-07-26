@@ -650,8 +650,8 @@ const processTxs = async (
     if (isExecuteAction && nonceStatus === 'future') {
       // Check if there is actually a pending proposal for the blocking nonce in the DB
       const blockingPendingTx = await pendingTransactions.findOne({
-        safeAddress: txSafeAddress,
-        network: network.toLowerCase(),
+        safeAddress: { $eq: txSafeAddress },
+        network: { $eq: network.toLowerCase() },
         chainId: chain.id,
         status: 'pending',
         'safeTx.data.nonce': Number(expectedNonce),
