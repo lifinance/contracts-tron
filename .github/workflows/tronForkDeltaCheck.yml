@@ -1,0 +1,81 @@
+# Tron fork-delta check [fork]
+# - Verifies that the Tron overlay this fork carries on top of lifinance/contracts is still
+#   intact, correctly versioned and audited after the change under review.
+# - Enforces two invariants (rules and messages live in script/tasks/tronForkDelta.ts):
+#     1. every file that carried a `-tron` version before the change still carries one, its
+#        baseline still matches upstream's current version for that file, the delta is still
+#        present, and any audit-relevant change bumps the version and lands an audit entry
+#     2. no file diverges from upstream without declaring it via a `-tron` version, so the
+#        overlay cannot grow silently
+# - Runs on every PR (no path filter): the check scans the whole src/ tree, so it also catches
+#   drift that predates the PR. It is cheap - no Foundry, submodules, RPC or typechain.
+# - This is the guard for the case a plain merge cannot catch: upstream bumps a customized
+#   contract, git raises a conflict on the version line, and the human resolution silently
+#   drops the `-tron` suffix or leaves a stale baseline. See docs/TronFork.md.
+# - Known limitation: only `src/**/*.sol` is covered. Non-source parts of the delta (CI
+#   workflows, config/networks.json) carry no version tag and are not machine-checkable.
+
+name: Tron fork-delta check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch: {}
+
+# Default-deny at the workflow level; grant only what the job needs at the job level.
+permissions: {}
+
+# Cancel superseded in-progress runs on the same PR (force-push / rapid commits).
+# Scoped to pull_request events so manual workflow_dispatch runs always complete.
+concurrency:
+  group: tron-fork-delta-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check-fork-delta:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # required to fetch repository contents
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+        with:
+          fetch-depth: 0 # the guard resolves file contents at the PR base as well as at HEAD
+          persist-credentials: false
+
+      - name: Fetch base branch and upstream lifinance/contracts
+        env:
+          # bound via env (not inline interpolation) so a crafted ref name cannot reach the
+          # shell as code - see [CONV:ACTIONS-NO-INJECTION]
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ##### workflow_dispatch has no PR context; fall back to the default branch
+          BASE_REF="${BASE_REF:-main}"
+          echo "BASE_REF=${BASE_REF}" >> "$GITHUB_ENV"
+
+          git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+
+          git remote add upstream https://github.com/lifinance/contracts.git
+          ##### only the tip tree is read, so a shallow fetch is enough
+          git fetch --no-tags --depth=1 upstream main
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        with:
+          bun-version-file: package.json
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Check Tron fork delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          bunx tsx script/tasks/checkTronForkDelta.ts \
+            --base "origin/${BASE_REF}" \
+            --head HEAD \
+            --upstream upstream/main

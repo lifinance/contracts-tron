@@ -1,4 +1,11 @@
 {
+  "_forkPolicy": {
+    "_comment": "[fork-only] Read this before adding or interpreting a '-tron' entry. This file is synced verbatim from lifinance/contracts; contracts-tron appends entries only for contracts that carry the Tron overlay.",
+    "whyTronVersionsExist": "Audits are keyed by contract name + @custom:version, so one version must map to exactly one bytecode. A contract that differs from upstream in this fork is tagged '<upstream-version>-tron' (further Tron-only iterations against the same upstream baseline append '-r2', '-r3', ...) and needs its own entry here. A contract identical to upstream keeps upstream's version and upstream's audit entry - do not duplicate it.",
+    "whenUpstreamBumpsAnOverlaidContract": "Upstream bumping e.g. LibAsset 2.1.3 -> 2.2.0 conflicts with our '2.1.3-tron' version line, so the sync lands as a PR instead of pushing to main. Resolving it means keeping the overlay AND rebasing the suffix to '2.2.0-tron' - never taking upstream's plain version line. The rebased version is a new version and therefore needs a new entry here: re-review the overlay as re-applied to the new upstream code. Upstream's audit of 2.2.0 does not cover our delta.",
+    "howMuchReviewIsNeeded": "Graded, and it is a human call recorded in the sync PR. If upstream's change does not touch the functions the overlay lives in, an internal SC-core review of the re-applied delta is enough - log it here like any other audit, with a written review note at auditReportPath. If upstream changed those functions, commission a full external audit as for any other -tron change.",
+    "enforcement": "The 'Tron fork-delta check' workflow fails when a '-tron' suffix is dropped, a baseline goes stale against upstream, an overlay disappears, or a bumped '-tron' version has no entry in this file. It also gates the weekly upstream sync from pushing to main. See docs/TronFork.md, section 'The fork-delta guard'."
+  },
   "audits": {
     "audit20240201": {
       "auditCompletedOn": "01.02.2024",

@@ -1,13 +1,15 @@
 # Sync upstream contracts
 # - Keeps contracts-tron:main up to date with lifinance/contracts:main (one-way, upstream -> fork)
-# - Clean merge: runs the full forge test suite against the merge result first; only
-#   if tests pass does it push directly to main as the lifi-contracts-tron-sync
-#   GitHub App. Requires the app to be added as a bypass actor on the "main
-#   protection" ruleset (manual one-time setup, see EXSC-587/EXSC-599) - otherwise
-#   this push is rejected and the job fails.
-# - Clean merge but failing tests: does NOT push to main; hands the merge commit off
+# - Clean merge: runs two gates against the merge result first - the Tron fork-delta
+#   guard (overlay still suffixed, baseline rebased onto upstream, audit logged) and
+#   the full forge test suite. Only if BOTH pass does it push directly to main as the
+#   lifi-contracts-tron-sync GitHub App. Requires the app to be added as a bypass
+#   actor on the "main protection" ruleset (manual one-time setup, see
+#   EXSC-587/EXSC-599) - otherwise this push is rejected and the job fails.
+# - Clean merge but a failed gate: does NOT push to main; hands the merge commit off
 #   to sync/upstream-YYYY-MM-DD-<run> and opens a PR so the breakage is reviewed
-#   with all required checks applied (EXSC-603)
+#   with all required checks applied (EXSC-603 for the tests, docs/TronFork.md
+#   section "The fork-delta guard" for the delta check)
 # - Conflicting merge: commits the conflict markers to sync/upstream-YYYY-MM-DD-<run>
 #   and opens a PR for manual resolution instead
 # - Known limitation: the pre-push test run is the same suite as forge-unit-tests.yml
@@ -62,6 +64,10 @@ jobs:
           UPSTREAM_SHA=$(git rev-parse --short upstream/main)
           echo "upstream_sha=${UPSTREAM_SHA}" >> "$GITHUB_OUTPUT"
 
+          ##### the fork's state before the merge - the fork-delta guard compares
+          ##### against it to tell what the merge itself changed
+          echo "pre_merge_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
           if git merge upstream/main --no-edit -m "chore: sync upstream contracts@${UPSTREAM_SHA}"; then
             echo -e "\033[32mClean merge, no conflicts\033[0m"
             echo "conflict=false" >> "$GITHUB_OUTPUT"
@@ -72,12 +78,9 @@ jobs:
 
       ##### Pre-push verification (EXSC-603): a textually clean merge can still
       ##### break the fork (Tron-specific divergence vs upstream changes), so the
-      ##### full test suite must pass against the merge result before anything
-      ##### lands on main. Setup mirrors forge-unit-tests.yml, unsharded.
-      - name: Sync submodules to merge result
-        if: steps.merge.outputs.conflict == 'false'
-        run: git submodule update --init --recursive
-
+      ##### fork-delta guard AND the full test suite must pass against the merge
+      ##### result before anything lands on main. The forge setup below mirrors
+      ##### forge-unit-tests.yml, unsharded.
       - name: Set up Bun
         if: steps.merge.outputs.conflict == 'false'
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
@@ -88,18 +91,43 @@ jobs:
         if: steps.merge.outputs.conflict == 'false'
         run: bun install --frozen-lockfile
 
-      - name: Install Foundry
+      ##### Fork-delta guard: the tests below prove the merge result still WORKS,
+      ##### this proves the Tron overlay is still correctly LABELLED - suffix kept,
+      ##### baseline rebased onto upstream's current version, audit entry present.
+      ##### Cheap (no Foundry) and runs first so a mislabelled merge fails in
+      ##### seconds instead of after the full suite. See docs/TronFork.md.
+      - name: Check Tron fork delta
+        id: delta
         if: steps.merge.outputs.conflict == 'false'
+        # continue-on-error so a violation routes to the PR-handoff step below
+        # instead of failing the job before the merge result is preserved
+        continue-on-error: true
+        env:
+          PRE_MERGE_SHA: ${{ steps.merge.outputs.pre_merge_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bunx tsx script/tasks/checkTronForkDelta.ts \
+            --base "$PRE_MERGE_SHA" \
+            --head HEAD \
+            --upstream upstream/main
+
+      - name: Sync submodules to merge result
+        if: steps.merge.outputs.conflict == 'false' && steps.delta.outcome == 'success'
+        run: git submodule update --init --recursive
+
+      - name: Install Foundry
+        if: steps.merge.outputs.conflict == 'false' && steps.delta.outcome == 'success'
         uses: ./.github/actions/setup-foundry
         with:
           cache-key-suffix: sync-upstream
 
       - name: Install forge Dependencies
-        if: steps.merge.outputs.conflict == 'false'
+        if: steps.merge.outputs.conflict == 'false' && steps.delta.outcome == 'success'
         run: forge install
 
       - name: Fetch RPC endpoints from MongoDB
-        if: steps.merge.outputs.conflict == 'false'
+        if: steps.merge.outputs.conflict == 'false' && steps.delta.outcome == 'success'
         run: |
           # Run the fetch-rpcs.ts script to update .env with RPC endpoint variables
           # This will fetch prioritized RPCs from MongoDB, or fall back to public RPCs from networks.json if MongoDB is unavailable
@@ -122,7 +150,7 @@ jobs:
 
       - name: Run forge tests against merge result
         id: verify
-        if: steps.merge.outputs.conflict == 'false'
+        if: steps.merge.outputs.conflict == 'false' && steps.delta.outcome == 'success'
         # continue-on-error so a red suite routes to the PR-handoff step below
         # instead of failing the job before the merge result is preserved
         continue-on-error: true
@@ -142,26 +170,38 @@ jobs:
           exit 1
 
       - name: Push directly to main
-        if: steps.merge.outputs.conflict == 'false' && steps.verify.outcome == 'success'
+        if: steps.merge.outputs.conflict == 'false' && steps.delta.outcome == 'success' && steps.verify.outcome == 'success'
         run: git push origin main
 
       - name: Hand off failing merge to PR
-        # Clean merge but red tests: never push to main; preserve the already-committed
-        # merge on a sync branch and open a PR where all required checks + review apply
-        if: steps.merge.outputs.conflict == 'false' && steps.verify.outcome == 'failure'
+        # Clean merge but a failed gate (mislabelled overlay or red tests): never push to
+        # main; preserve the already-committed merge on a sync branch and open a PR where
+        # all required checks + review apply
+        if: steps.merge.outputs.conflict == 'false' && (steps.delta.outcome == 'failure' || steps.verify.outcome == 'failure')
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          DELTA_OUTCOME: ${{ steps.delta.outcome }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
         run: |
           DATE=$(date -u +%Y-%m-%d)
           BRANCH="sync/upstream-${DATE}-${{ github.run_number }}"
+
+          ##### name the gate that failed so the PR title/body is actionable at a glance
+          if [[ "$DELTA_OUTCOME" == "failure" ]]; then
+            REASON="the Tron fork-delta guard FAILED (the overlay is no longer correctly versioned or audited) so the forge suite was skipped"
+            TITLE_SUFFIX="fork delta broken, review required"
+          else
+            REASON="the forge test suite FAILED against the merge result"
+            TITLE_SUFFIX="tests failing, review required"
+          fi
 
           git branch "${BRANCH}"
           git push origin "${BRANCH}"
 
           gh pr create \
             --repo lifinance/contracts-tron \
-            --title "chore: sync upstream contracts (${DATE}) - tests failing, review required" \
-            --body "Automated sync from \`lifinance/contracts@${{ steps.merge.outputs.upstream_sha }}\` merged cleanly but the forge test suite FAILED against the merge result, so it was not pushed to main. Test log: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Fix the breakage on this branch (or coordinate an upstream fix), then merge via the normal review process. See the Notion 'Tron deployments' page (section: The contracts-tron Fork) and EXSC-587/EXSC-603 for the sync rules." \
+            --title "chore: sync upstream contracts (${DATE}) - ${TITLE_SUFFIX}" \
+            --body "Automated sync from \`lifinance/contracts@${{ steps.merge.outputs.upstream_sha }}\` merged cleanly but ${REASON}, so it was not pushed to main. Log: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Fix it on this branch (or coordinate an upstream fix), then merge via the normal review process. See docs/TronFork.md (sections 'The fork-delta guard' and 'Versioning rules') and EXSC-587/EXSC-603 for the sync rules." \
             --base main \
             --head "${BRANCH}"
 

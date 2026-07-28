@@ -20,10 +20,13 @@
 #   - ensuring that the logged audit commit hash is part of the PR's commit list. Skipped for:
 #       - revert PRs (titles starting with "Revert" or containing "[Revert]") — the audited commit lives
 #         in the reverted PR's history, not the revert PR's; and
-#       - [fork] upstream-sync PRs (head branch "sync/upstream-*") — upstream squash-merges its PRs, so the
-#         audited feature-branch commit never reaches upstream/main and can never appear in a downstream
-#         sync PR's commit list. See the detailed rationale at the check itself. All other audit-log checks
-#         still run in both cases, so an unaudited contract is still rejected.
+#       - [fork] audits INHERITED from upstream on an upstream-sync PR (head branch "sync/upstream-*") —
+#         upstream squash-merges its PRs, so the audited feature-branch commit never reaches
+#         upstream/main and can never appear in a downstream sync PR's commit list. The skip is scoped
+#         to audit IDs that already exist in upstream/main's audit log; a fork-authored entry added by
+#         the sync PR itself (e.g. a re-reviewed "-tron" overlay) is verified normally. See the detailed
+#         rationale at the check itself. All other audit-log checks still run in both cases, so an
+#         unaudited contract is still rejected.
 # - assigns label "AuditCompleted" if the audit for each relevant modified contract passed all checks
 # - KNOWN LIMITATIONS
 #   - multiple audits can be registered per contract (in a specific version)
@@ -466,6 +469,22 @@ jobs:
           echo "This step will make sure that an audit is logged for each contract modified/added by this PR."
           echo "It will also make sure that no information is missing in the audit log and that the information is meaningful."
 
+          ##### [fork] On upstream-sync PRs the audit-commit-association check is skipped, but only
+          ##### for audit IDs that already exist upstream (see the detailed rationale at the check
+          ##### itself). Snapshot upstream's audit log once here so each audit can be classified as
+          ##### inherited-from-upstream vs newly added by the fork.
+          UPSTREAM_AUDIT_LOG=""
+          if [[ "$HEAD_REF" == sync/upstream-* ]]; then
+            UPSTREAM_AUDIT_LOG=$(mktemp)
+            git remote get-url upstream >/dev/null 2>&1 || git remote add upstream https://github.com/lifinance/contracts.git
+            if ! git fetch --no-tags --depth=1 upstream main >/dev/null 2>&1 ||
+               ! git show upstream/main:audit/auditLog.json > "$UPSTREAM_AUDIT_LOG" 2>/dev/null; then
+              echo -e "\033[31mCould not read audit/auditLog.json from upstream/main.\033[0m"
+              echo -e "\033[31mIt is required to tell inherited audits apart from fork-authored ones on a sync PR. Re-run once upstream is reachable.\033[0m"
+              exit 1
+            fi
+          fi
+
           # convert from comma-separated to newline-separated
           PROTECTED_CONTRACTS=$(tr ',' '\n' < contracts_for_audit.txt)
           echo "PROTECTED_CONTRACTS: $PROTECTED_CONTRACTS"
@@ -603,7 +622,7 @@ jobs:
               ##### a revert PR cannot contain the originally audited commit, and the check
               ##### would otherwise make it impossible to revert through the normal PR process
               #####
-              ##### also skipped for upstream-sync PRs (head branch "sync/upstream-*") — [fork]:
+              ##### also skipped for INHERITED audits on upstream-sync PRs (head branch "sync/upstream-*") — [fork]:
               ##### upstream SQUASH-merges its PRs, so the exact commit an auditor reviewed lives only on
               ##### the upstream PR's feature branch and is discarded by the squash; it never lands on
               ##### upstream/main under the same hash and so can never appear in a downstream sync PR's
@@ -611,10 +630,22 @@ jobs:
               ##### hash. This check would therefore fail on every audited contract a sync pulls in. The
               ##### audits were already verified upstream; every other audit-log check below still runs.
               ##### Detection keys on the head branch (from our sync tooling), not the editable PR title.
+              #####
+              ##### The skip is deliberately narrow: it applies ONLY to audit IDs that already exist in
+              ##### upstream/main's audit log. An audit entry ADDED by the sync PR itself — e.g. the
+              ##### re-review of a "-tron" overlay after its baseline was rebased — is fork-authored, its
+              ##### commit does live in this PR, and it is verified like any other. A blanket skip would
+              ##### exempt exactly the entry that most needs checking.
+              INHERITED_FROM_UPSTREAM=false
+              if [[ -n "$UPSTREAM_AUDIT_LOG" ]] &&
+                 jq -e --arg id "$AUDIT_ID" '.audits[$id] != null' "$UPSTREAM_AUDIT_LOG" > /dev/null 2>&1; then
+                INHERITED_FROM_UPSTREAM=true
+              fi
+
               if [[ "$PR_TITLE" == Revert* || "$PR_TITLE" == *"[Revert]"* ]]; then
                 echo "PR title indicates a revert PR. Skipping audit commit hash verification for audit $AUDIT_ID."
-              elif [[ "$HEAD_REF" == sync/upstream-* ]]; then
-                echo "Head branch ($HEAD_REF) indicates an upstream-sync PR; the audited commit was squashed away upstream. Skipping audit commit hash verification for audit $AUDIT_ID."
+              elif [[ "$INHERITED_FROM_UPSTREAM" == "true" ]]; then
+                echo "Audit $AUDIT_ID already exists upstream and reached this upstream-sync PR ($HEAD_REF) through the sync; its audited commit was squashed away upstream. Skipping audit commit hash verification."
               else
                 echo "now checking if audit commit hash $AUDIT_COMMIT_HASH is associated with PR $PR_NUMBER"
                 ##### Fetch the list of commits associated with the PR
