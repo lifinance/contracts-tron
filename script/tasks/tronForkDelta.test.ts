@@ -175,7 +175,7 @@ describe('checkForkDelta', () => {
     ])
   })
 
-  it('accepts a -tron baseline rebased onto the new upstream version', () => {
+  it('accepts a -tron baseline rebased onto the new upstream version when audited', () => {
     const rebased = FORK.replace('2.1.3-tron', '2.2.0-tron')
 
     expect(
@@ -189,6 +189,14 @@ describe('checkForkDelta', () => {
         AUDIT_LOG
       )
     ).toEqual([])
+  })
+
+  it('flags a version-only rebase that has no audit-log entry', () => {
+    const rebased = FORK.replace('2.1.3-tron', '2.3.0-tron')
+
+    expect(
+      codes([file({ headSource: rebased, upstreamSource: solidity('2.3.0') })])
+    ).toEqual(['TRON_AUDIT_MISSING'])
   })
 
   it('accepts a -tron revision suffix on a matching baseline', () => {
@@ -303,6 +311,19 @@ describe('checkForkDelta', () => {
         }),
       ])
     ).toEqual([])
+  })
+
+  it('flags a newly declared -tron overlay with no audit-log entry', () => {
+    expect(
+      codes([
+        file({
+          path: 'src/Facets/TronOnlyFacet.sol',
+          baseSource: null,
+          headSource: solidity('1.0.0-tron'),
+          upstreamSource: null,
+        }),
+      ])
+    ).toEqual(['TRON_AUDIT_MISSING'])
   })
 
   it('ignores a file deleted in both the fork and upstream', () => {

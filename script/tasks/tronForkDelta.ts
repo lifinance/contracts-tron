@@ -125,9 +125,11 @@ function hasAuditEntry(
  * Two invariants are enforced. For every file that carried a `-tron` version on
  * the fork before the change, the overlay must survive the change: the suffix
  * stays, the baseline tracks upstream's current version, the delta is still
- * present, and any audit-relevant change bumps the version and lands an audit
- * entry. For every other file, divergence from upstream must be declared by
- * carrying a `-tron` version — so the overlay cannot grow silently.
+ * present, and any version change (including a tag-only rebase) or
+ * audit-relevant edit bumps the version and lands an audit entry. For every
+ * other file, divergence from upstream must be declared by carrying a `-tron`
+ * version — and that new version must also be audited — so the overlay cannot
+ * grow silently.
  *
  * @param files - File states to evaluate.
  * @param auditLog - Parsed `audit/auditLog.json`.
@@ -162,13 +164,28 @@ export function checkForkDelta(
         upstreamSource === null ||
         hasRelevantChanges(upstreamSource, headSource)
 
-      if (divergesFromUpstream && !isDeclared)
+      if (divergesFromUpstream && !isDeclared) {
         report(
           path,
           'UNDECLARED_FORK_DELTA',
           `differs from upstream but carries version "${
             headVersion ?? 'none'
           }". Declare the overlay by tagging it "<upstream-version>-tron", or drop the divergence.`
+        )
+        continue
+      }
+
+      // Newly declared overlay: the suffix alone is not enough — every -tron
+      // version needs its own audit entry (same rule as a rebased existing one).
+      if (
+        isDeclared &&
+        headVersion !== null &&
+        !hasAuditEntry(auditLog, path, headVersion)
+      )
+        report(
+          path,
+          'TRON_AUDIT_MISSING',
+          `declares the tron overlay at "${headVersion}", but audit/auditLog.json has no entry for that version.`
         )
 
       continue
@@ -244,9 +261,16 @@ export function checkForkDelta(
       continue
     }
 
-    if (!hasRelevantChanges(baseSource ?? '', headSource)) continue
+    const relevant = hasRelevantChanges(baseSource ?? '', headSource)
 
-    if (headVersion === baseVersion) {
+    // Comment/pragma/whitespace-only edits that leave the version alone are
+    // ignored — same filter as versionControlAndAuditCheck.yml. A version
+    // change alone still requires an audit entry: rebasing `2.1.3-tron` →
+    // `2.2.0-tron` is a new version even when significantLines() sees no diff
+    // (the @custom:version line is stripped by that filter).
+    if (!relevant && headVersion === baseVersion) continue
+
+    if (relevant && headVersion === baseVersion) {
       report(
         path,
         'TRON_VERSION_NOT_BUMPED',

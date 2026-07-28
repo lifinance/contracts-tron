@@ -631,14 +631,22 @@ jobs:
               ##### audits were already verified upstream; every other audit-log check below still runs.
               ##### Detection keys on the head branch (from our sync tooling), not the editable PR title.
               #####
-              ##### The skip is deliberately narrow: it applies ONLY to audit IDs that already exist in
-              ##### upstream/main's audit log. An audit entry ADDED by the sync PR itself — e.g. the
-              ##### re-review of a "-tron" overlay after its baseline was rebased — is fork-authored, its
-              ##### commit does live in this PR, and it is verified like any other. A blanket skip would
-              ##### exempt exactly the entry that most needs checking.
+              ##### The skip is deliberately narrow: it applies ONLY to audit entries that already
+              ##### exist in upstream/main's audit log AND are byte-identical to that upstream entry.
+              ##### An audit entry ADDED by the sync PR itself — e.g. the re-review of a "-tron"
+              ##### overlay after its baseline was rebased — is fork-authored, its commit does live
+              ##### in this PR, and it is verified like any other. Mutating an inherited entry's
+              ##### metadata (e.g. auditCommitHash) also fails the identity check and is verified.
+              ##### A blanket skip would exempt exactly the entry that most needs checking.
               INHERITED_FROM_UPSTREAM=false
+              # "Inherited" means the entry is byte-identical to upstream's — ID
+              # presence alone is not enough. A sync PR that mutates an upstream
+              # audit's metadata (e.g. auditCommitHash) is fork-authored tampering
+              # and must still pass commit-association.
               if [[ -n "$UPSTREAM_AUDIT_LOG" ]] &&
-                 jq -e --arg id "$AUDIT_ID" '.audits[$id] != null' "$UPSTREAM_AUDIT_LOG" > /dev/null 2>&1; then
+                 jq -e --arg id "$AUDIT_ID" --slurpfile up "$UPSTREAM_AUDIT_LOG" '
+                   ($up[0].audits[$id] != null) and (.audits[$id] == $up[0].audits[$id])
+                 ' audit/auditLog.json > /dev/null 2>&1; then
                 INHERITED_FROM_UPSTREAM=true
               fi
 
