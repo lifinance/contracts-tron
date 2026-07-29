@@ -371,6 +371,11 @@ export async function saveContractAddress(
     `deployments/${network}.${fileSuffix}json`
   )
 
+  const relativePath = path.relative(root, deploymentFile)
+  if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+    throw new Error('Invalid file path')
+  }
+
   let deployments: Record<string, string> = {}
 
   try {
@@ -401,7 +406,12 @@ export async function getContractAddress(
   const filesToTry: string[] = []
   for (const root of roots) {
     filesToTry.push(resolve(root, `deployments/${network}.${fileSuffix}json`))
-    filesToTry.push(resolve(root, `deployments/${network}.json`))
+    const resolvedBase = resolve(root, 'deployments')
+    const resolvedTarget = resolve(root, `deployments/${network}.json`)
+    const relativePath = relative(resolvedBase, resolvedTarget)
+    if (!relativePath.startsWith('..') && !isAbsolute(relativePath)) {
+      filesToTry.push(resolvedTarget)
+    }
   }
   // When staging Tron, mainnet deployment may be the only file
   if (network === 'tronshasta')
@@ -466,12 +476,13 @@ export async function getFacetSelectors(
   facetName: string,
   excludeSelectors: string[] = []
 ): Promise<string[]> {
-  const artifactPath = resolve(
-    process.cwd(),
-    'out',
-    `${facetName}.sol`,
-    `${facetName}.json`
-  )
+  const base = resolve(process.cwd(), 'out')
+  const target = resolve(base, `${facetName}.sol`, `${facetName}.json`)
+  const relative = path.relative(base, target)
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error(`Invalid facet name: ${facetName}`)
+  }
+  const artifactPath = target
 
   // Check if artifact exists
   try {

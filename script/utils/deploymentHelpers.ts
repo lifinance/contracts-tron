@@ -36,7 +36,15 @@ export const getDeployments = async (
     environment === EnvironmentEnum.production
       ? `${chain}.json`
       : `${chain}.staging.json`
-  const filePath = path.resolve(__dirname, `../../deployments/${fileName}`)
+  const base = path.resolve(__dirname, '../../deployments')
+  const target = path.resolve(base, fileName)
+  const relative = path.relative(base, target)
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error(
+      `Invalid file path for ${chain} (${environment})`
+    )
+  }
+  const filePath = target
 
   const loadPromise: Promise<DeploymentsFileModule> = import(filePath).catch(
     () => {

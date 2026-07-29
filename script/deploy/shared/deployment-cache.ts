@@ -251,7 +251,7 @@ export class DeploymentCache {
     if (!existsSync(metadataPath)) return null
 
     try {
-      const content = readFileSync(metadataPath, 'utf8')
+      const content = readFileSync(path.resolve(metadataPath), 'utf8')
       return JSON.parse(content) as ICacheMetadata
     } catch (error) {
       consola.warn(`Failed to read cache metadata: ${error}`)
