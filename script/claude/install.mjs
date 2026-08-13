@@ -53,7 +53,7 @@ function claudeCli(args) {
 }
 
 function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, 'utf8'))
+  if (file.includes('..') || path.isAbsolute(file)) throw new Error('Invalid file path'); return JSON.parse(fs.readFileSync(file, 'utf8'))
 }
 
 function writeJson(file, data) {

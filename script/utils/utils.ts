@@ -400,7 +400,12 @@ export async function getContractAddress(
 
   const filesToTry: string[] = []
   for (const root of roots) {
-    filesToTry.push(resolve(root, `deployments/${network}.${fileSuffix}json`))
+    const resolvedBase = resolve(root, 'deployments')
+    const resolvedTarget = resolve(resolvedBase, `${network}.${fileSuffix}json`)
+    const relativePath = relative(resolvedBase, resolvedTarget)
+    if (!relativePath.startsWith('..') && !isAbsolute(relativePath)) {
+      filesToTry.push(resolvedTarget)
+    }
     filesToTry.push(resolve(root, `deployments/${network}.json`))
   }
   // When staging Tron, mainnet deployment may be the only file
