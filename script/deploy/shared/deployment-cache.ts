@@ -223,7 +223,13 @@ export class DeploymentCache {
   private getMetadataFilePath(
     environment: keyof typeof EnvironmentEnum
   ): string {
-    return path.join(this.cacheDir, `deployments_${environment}.metadata.json`)
+    const target = path.resolve(this.cacheDir, `deployments_${environment}.metadata.json`);
+    const base = path.resolve(this.cacheDir);
+    const relative = path.relative(base, target);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) {
+      throw new Error('Invalid file path');
+    }
+    return target;
   }
 
   /**
