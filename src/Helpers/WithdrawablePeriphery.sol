@@ -5,6 +5,12 @@ import { TransferrableOwnership } from "./TransferrableOwnership.sol";
 import { LibAsset } from "../Libraries/LibAsset.sol";
 import { ZeroAmount } from "../Errors/GenericErrors.sol";
 
+// TODO(EXSC-241): route withdrawToken through LibAsset.transferAsset and add a
+//                 ZeroAmount check. Deferred because this contract is inherited
+//                 by many periphery contracts; bumping it here would force
+//                 redeploys of all inheritors or drift the repo from deployed
+//                 bytecode. Re-enable once EXSC-330 (commit hash stored in
+//                 deploy log) makes that drift recoverable via re-verification.
 /// @custom:version 1.0.0-tron
 abstract contract WithdrawablePeriphery is TransferrableOwnership {
     event TokensWithdrawn(

@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: LGPL-3.0-only
-
 pragma solidity ^0.8.17;
 
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -203,6 +202,7 @@ contract LiFiIntentEscrowFacet is
         } else {
             // Check if the receiver is the same according to bridgeData and LIFIIntentData
             // Note: We already know 0 <= _bridgeData.receiver < recipient != 0 thus _bridgeData.receiver != 0.
+            // TODO(EXSC-626): migrate to LibBytes.toBytes32 — see LibBytes v1.1.0
             if (recipient != bytes32(uint256(uint160(_bridgeData.receiver)))) {
                 revert InvalidReceiver();
             }
