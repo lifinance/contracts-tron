@@ -98,6 +98,13 @@ jobs:
         if: steps.merge.outputs.conflict == 'false'
         run: forge install
 
+      # The .husky/pre-push hook type-checks script/**, which imports generated
+      # typechain/ bindings; without them the push below aborts before it reaches
+      # the remote. Mirrors validateScripts.yml.
+      - name: Generate typechain bindings
+        if: steps.merge.outputs.conflict == 'false'
+        run: bun typechain:incremental
+
       - name: Fetch RPC endpoints from MongoDB
         if: steps.merge.outputs.conflict == 'false'
         run: |
