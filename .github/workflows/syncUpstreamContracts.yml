@@ -98,6 +98,13 @@ jobs:
         if: steps.merge.outputs.conflict == 'false'
         run: forge install
 
+      # The .husky/pre-push hook type-checks script/**, which imports generated
+      # typechain/ bindings; without them the push below aborts before it reaches
+      # the remote. Mirrors validateScripts.yml.
+      - name: Generate typechain bindings
+        if: steps.merge.outputs.conflict == 'false'
+        run: bun typechain:incremental
+
       - name: Fetch RPC endpoints from MongoDB
         if: steps.merge.outputs.conflict == 'false'
         run: |
@@ -187,3 +194,20 @@ jobs:
             --body "Automated sync from \`lifinance/contracts@${{ steps.merge.outputs.upstream_sha }}\` hit merge conflicts. Conflict markers are committed as-is on this branch - resolve them manually. See the Notion 'Tron deployments' page (section: The contracts-tron Fork) and EXSC-587 for the sync/versioning rules." \
             --base main \
             --head "${BRANCH}"
+
+      ##### A sync that never lands is invisible: the job is a weekly cron nobody
+      ##### watches, and the two hand-off paths exit successfully. Alert on any run
+      ##### that did not push to main, whatever the reason.
+      - name: Notify Slack when the sync did not land on main
+        if: >-
+          always() && (failure()
+          || steps.merge.outputs.conflict == 'true'
+          || steps.verify.outcome == 'failure')
+        uses: slackapi/slack-github-action@485a9d42d3a73031f12ec201c457e2162c45d02d # v2.0.0
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_DEV_SC_GITHUB_CI_NOTIFICATIONS }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "text": ":warning: contracts-tron upstream sync did not reach main (${{ steps.merge.outputs.conflict == 'true' && 'merge conflicts - PR opened' || steps.verify.outcome == 'failure' && 'tests failed - PR opened' || 'job failed' }}): <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|run #${{ github.run_number }}>. The fork stays behind lifinance/contracts until this is resolved."
+            }
