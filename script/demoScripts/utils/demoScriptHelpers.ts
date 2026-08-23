@@ -752,7 +752,12 @@ export const getDeployments = async (
     environment === EnvironmentEnum.production
       ? `${chain}.json`
       : `${chain}.staging.json`
-  const filePath = path.resolve(__dirname, `../../../deployments/${fileName}`)
+  const base = path.resolve(__dirname, `../../../deployments`)
+  const filePath = path.resolve(base, fileName)
+  const relative = path.relative(base, filePath)
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error(`Invalid file path for ${chain} (${environment})`)
+  }
 
   try {
     const deployments = await import(filePath)

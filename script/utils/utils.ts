@@ -261,9 +261,13 @@ async function pickDeploymentRootForWrites(
   const roots = getDeploymentRoots()
   const envDeploymentPath = `deployments/${network}.${fileSuffix}json`
 
-  for (const candidate of roots)
-    if (await Bun.file(resolve(candidate, envDeploymentPath)).exists())
+  for (const candidate of roots) {
+    const base = path.resolve(candidate)
+    const target = path.resolve(base, envDeploymentPath)
+    const rel = path.relative(base, target)
+    if (!rel.startsWith('..') && !path.isAbsolute(rel) && await Bun.file(target).exists())
       return candidate
+  }
 
   for (const candidate of roots)
     if (await Bun.file(resolve(candidate, 'deployments')).exists())
