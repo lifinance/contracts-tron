@@ -1,9 +1,14 @@
+import { mkdtempSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
+
 import {
   describe,
   expect,
   it,
   // eslint-disable-next-line import/no-unresolved
 } from 'bun:test'
+import { consola } from 'consola'
 import { getAddress, type Address, type Hex, type PublicClient } from 'viem'
 
 import globalConfig from '../../config/global.json'
@@ -1622,6 +1627,160 @@ describe('immutable-bindings-match-config invariant', () => {
   })
 })
 
+describe('immutable-bindings-match-config declared-zero bindings', () => {
+  const FACET = '0x7777777777777777777777777777777777777777'
+  const ZERO = '0x0000000000000000000000000000000000000000'
+  const OTHER = '0x5555555555555555555555555555555555555555'
+
+  const invariant = HEALTH_CHECK_INVARIANTS.find(
+    (i) => i.name === 'immutable-bindings-match-config'
+  ) as IHealthCheckInvariant
+
+  /** One live facet at FACET on `network`, each getter answering from `getterValues`. */
+  function makeFacetCtx(
+    contractName: string,
+    network: string,
+    getterValues: Record<string, string>
+  ): IHealthCheckContext {
+    return Object.assign(makeCtx(), {
+      networkLower: network,
+      diamondAddress: FACET,
+      deployedContracts: { [contractName]: FACET },
+      coreFacetsToCheck: [],
+      nonCoreFacets: [contractName],
+      onChainFacets: [{ address: FACET, selectors: ['0xffffffff'] }],
+      publicClient: {
+        readContract: async ({ functionName }: { functionName: string }) => {
+          if (functionName === 'getPeripheryContract') return ZERO
+          return getterValues[functionName] ?? OTHER
+        },
+      },
+    } as unknown as IHealthCheckContext)
+  }
+
+  const fraxChecks = collectImmutableBindingChecks(
+    'mainnet',
+    'production'
+  ).filter((c) => c.contractName === 'FraxFacet')
+  const fraxHop = fraxChecks.find((c) => c.getter === 'FRAX_HOP')
+  const fraxPathUsd = fraxChecks.find((c) => c.getter === 'FRAX_PATH_USD')
+
+  it('frax.json carries a hop but no pathUsd for mainnet (test precondition)', () => {
+    expect(fraxHop?.expectedAddress).toBeTruthy()
+    expect(fraxPathUsd?.expectedAddress).toBeNull()
+    expect(fraxPathUsd?.zeroAddressAllowed).toBe(true)
+    expect(fraxPathUsd?.configFileLoaded).toBe(true)
+  })
+
+  it('passes a zero binding whose config map deliberately omits this network', async () => {
+    const ctx = makeFacetCtx('FraxFacet', 'mainnet', {
+      FRAX_HOP: fraxHop?.expectedAddress as string,
+      FRAX_TIP_FEE_MANAGER: ZERO,
+      FRAX_PATH_USD: ZERO,
+    })
+
+    await invariant.run(ctx)
+
+    expect(ctx.errors).toEqual([])
+    // A "cannot verify" warning here means the omission is being skipped rather than asserted,
+    // which leaves the binding unchecked on every chain the map omits.
+    expect(ctx.warnings.filter((w) => w.includes('cannot verify'))).toEqual([])
+  })
+
+  it('errors when a binding whose config map omits this network holds an address', async () => {
+    const ctx = makeFacetCtx('FraxFacet', 'mainnet', {
+      FRAX_HOP: fraxHop?.expectedAddress as string,
+      FRAX_TIP_FEE_MANAGER: ZERO,
+      FRAX_PATH_USD: OTHER,
+    })
+
+    await invariant.run(ctx)
+
+    expect(ctx.errors).toHaveLength(1)
+    expect(ctx.errors[0]).toContain('FRAX_PATH_USD()')
+    expect(ctx.errors[0]).toContain(getAddress(OTHER))
+    expect(ctx.errors[0]).toContain('.pathUsd.mainnet')
+  })
+
+  const bobaPeriphery = collectImmutableBindingChecks(
+    'boba',
+    'production'
+  ).find((c) => c.getter === 'SPOKE_POOL_PERIPHERY')
+
+  it('across.json holds an explicit zero periphery for boba (test precondition)', () => {
+    expect(bobaPeriphery?.expectedAddress).toBe(ZERO)
+    expect(bobaPeriphery?.zeroAddressAllowed).toBe(true)
+  })
+
+  it('passes a zero binding whose config value is an explicit zero', async () => {
+    const acrossChecks = collectImmutableBindingChecks(
+      'boba',
+      'production'
+    ).filter((c) => c.contractName === 'AcrossV4SwapFacet')
+    const ctx = makeFacetCtx(
+      'AcrossV4SwapFacet',
+      'boba',
+      Object.fromEntries(
+        acrossChecks.map((c) => [c.getter, c.expectedAddress ?? ZERO])
+      )
+    )
+
+    await invariant.run(ctx)
+
+    expect(ctx.errors).toEqual([])
+  })
+
+  it('warns rather than asserting zero when the config file cannot be read', async () => {
+    // The declared-zero assertion rests on config saying so. Run from a directory with no
+    // `config/`, every lookup returns null for want of a file, and a check that skipped this
+    // distinction would read that as "the value is zero" on every network at once.
+    const cwd = process.cwd()
+    const ctx = makeFacetCtx('FraxFacet', 'mainnet', {
+      FRAX_PATH_USD: ZERO,
+      FRAX_TIP_FEE_MANAGER: ZERO,
+    })
+
+    try {
+      process.chdir(mkdtempSync(join(tmpdir(), 'no-config-')))
+      await invariant.run(ctx)
+    } finally {
+      process.chdir(cwd)
+    }
+
+    expect(ctx.errors).toEqual([])
+    expect(
+      ctx.warnings.some(
+        (w) => w.includes('FRAX_PATH_USD()') && w.includes('cannot verify')
+      )
+    ).toBe(true)
+  })
+
+  it('errors when a binding config states as zero holds an address', async () => {
+    const acrossChecks = collectImmutableBindingChecks(
+      'boba',
+      'production'
+    ).filter((c) => c.contractName === 'AcrossV4SwapFacet')
+    const ctx = makeFacetCtx(
+      'AcrossV4SwapFacet',
+      'boba',
+      Object.fromEntries(
+        acrossChecks.map((c) => [
+          c.getter,
+          c.getter === 'SPOKE_POOL_PERIPHERY'
+            ? OTHER
+            : c.expectedAddress ?? ZERO,
+        ])
+      )
+    )
+
+    await invariant.run(ctx)
+
+    expect(ctx.errors).toHaveLength(1)
+    expect(ctx.errors[0]).toContain('SPOKE_POOL_PERIPHERY()')
+    expect(ctx.errors[0]).toContain('.boba.spokePoolPeriphery')
+  })
+})
+
 describe('immutable-bindings-match-config legacy getter fallback', () => {
   const FACET = '0x7777777777777777777777777777777777777777'
   const ZERO = '0x0000000000000000000000000000000000000000'
@@ -3020,5 +3179,302 @@ describe('periphery-registered scheduled-registration coverage', () => {
     const ctx = makePeripheryCtx(covering(), { isTron: true })
     await invariant('periphery-registered').run(ctx)
     expect(ctx.errors).toHaveLength(1)
+  })
+})
+
+/**
+ * `safe-config` asserts the owner set in **both** directions.
+ *
+ * An owner added to the Safe leaves every configured owner in place and the
+ * threshold at or above its floor, so only the on-chain direction can see it.
+ * The assertions come in pairs: each refusal is matched by the configuration
+ * that must still pass, because a check that refused every owner set would
+ * satisfy the refusals alone.
+ */
+const SAFE = '0x1111111111111111111111111111111111111111'
+const OWNER_A = '0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa'
+const OWNER_B = '0xBbBbBBBb00000000000000000000000000000001'
+const OWNER_C = '0xcCcCcCCc00000000000000000000000000000002'
+const INTRUDER = '0xdDdDddDd00000000000000000000000000000003'
+
+function makeSafeCtx(stub: {
+  configured: string[]
+  onChain: string[]
+  threshold?: bigint
+  safeAddress?: string | undefined
+}): IHealthCheckContext {
+  const ctx = makeCtx()
+  Object.assign(ctx, {
+    globalConfig: { safeOwners: stub.configured },
+    networkConfig: {
+      safeAddress: 'safeAddress' in stub ? stub.safeAddress : SAFE,
+    },
+    publicClient: {
+      readContract: async ({ functionName }: { functionName: string }) => {
+        if (functionName === 'getOwners') return stub.onChain
+        if (functionName === 'getThreshold') return stub.threshold ?? BigInt(3)
+        return BigInt(7)
+      },
+    },
+  })
+  return ctx
+}
+
+describe('safe-config asserts the owner set both ways', () => {
+  it('passes when the on-chain owners are exactly the configured ones', async () => {
+    const ctx = makeSafeCtx({
+      configured: [OWNER_A, OWNER_B, OWNER_C],
+      onChain: [OWNER_A, OWNER_B, OWNER_C],
+    })
+    await invariant('safe-config').run(ctx)
+    expect(ctx.errors).toEqual([])
+  })
+
+  it('fails on an owner added to the Safe but absent from config', async () => {
+    // Every configured owner is still an owner and the threshold is untouched,
+    // so nothing but the on-chain direction can reach this.
+    const ctx = makeSafeCtx({
+      configured: [OWNER_A, OWNER_B, OWNER_C],
+      onChain: [OWNER_A, OWNER_B, OWNER_C, INTRUDER],
+    })
+    await invariant('safe-config').run(ctx)
+    expect(ctx.errors).toHaveLength(1)
+    expect(ctx.errors[0]).toContain(getAddress(INTRUDER))
+    expect(ctx.errors[0]).toContain('NOT in config/global.json')
+  })
+
+  it('still fails on a configured owner removed from the Safe', async () => {
+    const ctx = makeSafeCtx({
+      configured: [OWNER_A, OWNER_B, OWNER_C],
+      onChain: [OWNER_A, OWNER_B],
+    })
+    await invariant('safe-config').run(ctx)
+    expect(ctx.errors).toHaveLength(1)
+    expect(ctx.errors[0]).toContain(getAddress(OWNER_C))
+    expect(ctx.errors[0]).toContain('NOT an owner')
+  })
+
+  it('says which side each direction is missing from', async () => {
+    // Both messages name a set and a side, so a responder knows which file to
+    // open.
+    const ctx = makeSafeCtx({
+      configured: [OWNER_A, OWNER_C],
+      onChain: [OWNER_A, INTRUDER],
+    })
+    await invariant('safe-config').run(ctx)
+    expect(ctx.errors).toHaveLength(2)
+    const configuredSideMissing = ctx.errors.find((e) =>
+      e.includes(getAddress(OWNER_C))
+    )
+    const chainSideExtra = ctx.errors.find((e) =>
+      e.includes(getAddress(INTRUDER))
+    )
+    expect(configuredSideMissing).toContain('is in config/global.json')
+    expect(configuredSideMissing).toContain('NOT an owner')
+    expect(chainSideExtra).toContain('on chain')
+    expect(chainSideExtra).toContain('NOT in config/global.json')
+  })
+
+  it('compares checksummed, so a lowercased config entry is not a mismatch', async () => {
+    const ctx = makeSafeCtx({
+      configured: [OWNER_A.toLowerCase(), OWNER_B.toLowerCase()],
+      onChain: [getAddress(OWNER_A), getAddress(OWNER_B)],
+    })
+    await invariant('safe-config').run(ctx)
+    expect(ctx.errors).toEqual([])
+  })
+
+  it('refuses rather than reports when config lists no owners', async () => {
+    // An empty expected set is a subset of every on-chain set there is, so a
+    // comparison against it agrees with anything.
+    const ctx = makeSafeCtx({ configured: [], onChain: [OWNER_A, INTRUDER] })
+    await invariant('safe-config').run(ctx)
+    expect(ctx.errors).toHaveLength(1)
+    expect(ctx.errors[0]).toContain('lists no safeOwners')
+  })
+
+  it('says the added-owner check could not run when a config entry is malformed', async () => {
+    // An incomplete configured set would make an on-chain owner it cannot match
+    // look like an intruder, so the check reports that it could not compare
+    // rather than naming an owner that may well be configured.
+    const ctx = makeSafeCtx({
+      configured: [OWNER_A, '0xnot-an-address'],
+      onChain: [getAddress(OWNER_A), getAddress(OWNER_B)],
+    })
+    await invariant('safe-config').run(ctx)
+    expect(ctx.errors.join('\n')).toContain('not a valid address')
+    expect(ctx.errors.join('\n')).toContain('0xnot-an-address')
+    // Never named as unexpected on the strength of an incomplete config set.
+    expect(ctx.errors.join('\n')).not.toContain(
+      `${getAddress(OWNER_B)} is an owner`
+    )
+  })
+
+  it('treats a blank config entry as unusable, not as one to skip', async () => {
+    // An incomplete configured set names a legitimate signer as an unexpected
+    // owner of the Safe, sending the responder to the Safe instead of to the
+    // blank config line.
+    for (const blank of ['', null, undefined] as unknown as string[]) {
+      const ctx = makeSafeCtx({
+        configured: [OWNER_A, blank],
+        onChain: [getAddress(OWNER_A), getAddress(OWNER_B)],
+      })
+      await invariant('safe-config').run(ctx)
+      const joined = ctx.errors.join('\n')
+
+      expect(joined).toContain('not a valid address')
+      expect(joined).not.toContain(`${getAddress(OWNER_B)} is an owner`)
+    }
+  })
+
+  it('identifies an unusable entry that renders to nothing visible', async () => {
+    // Sanitising strips most invisible characters but not all: a zero-width
+    // joiner and a Hangul filler both survive it at zero width, so a rendering
+    // alone cannot name the line to fix. Position and length can.
+    const cases: Array<[string, string]> = [
+      ['whitespace', '   '],
+      ['zero-width space', '\u200b'],
+      ['zero-width joiner', '\u200d'],
+      ['Hangul filler', '\u3164'],
+    ]
+
+    for (const [name, value] of cases) {
+      const ctx = makeSafeCtx({
+        configured: [OWNER_A, value],
+        onChain: [getAddress(OWNER_A)],
+      })
+      await invariant('safe-config').run(ctx)
+      const joined = ctx.errors.join('\n')
+
+      expect(joined, name).toContain('entry 1')
+      expect(joined, name).toContain(
+        `${value.length} char${value.length === 1 ? '' : 's'}`
+      )
+    }
+  })
+
+  it('strips control characters out of an unusable entry', async () => {
+    // The description reaches an operator's terminal and a job log, so an entry
+    // carrying an escape sequence must not be interpolated raw.
+    const esc = String.fromCharCode(27)
+    const ctx = makeSafeCtx({
+      configured: [OWNER_A, `${esc}[31mRED`],
+      onChain: [getAddress(OWNER_A)],
+    })
+    await invariant('safe-config').run(ctx)
+    const joined = ctx.errors.join('\n')
+
+    expect(joined).not.toContain(esc)
+    // Paired presence: the entry is still described, not silently dropped.
+    expect(joined).toContain('RED')
+  })
+
+  it('distinguishes two unusable entries that render identically', async () => {
+    // The whole point of carrying position and length: without them these two
+    // are the same text in the operator's terminal.
+    const ctx = makeSafeCtx({
+      configured: ['\u200d', '\u200d\u200d', OWNER_A],
+      onChain: [getAddress(OWNER_A)],
+    })
+    await invariant('safe-config').run(ctx)
+    const joined = ctx.errors.join('\n')
+
+    expect(joined).toContain('entry 0')
+    expect(joined).toContain('entry 1')
+    expect(joined).toContain('1 char')
+    expect(joined).toContain('2 chars')
+  })
+
+  it('refuses a duplicated config entry, which set equality cannot see', async () => {
+    // The two sets agree — config just claims one more owner than the Safe has.
+    const ctx = makeSafeCtx({
+      configured: [OWNER_A, OWNER_A, OWNER_B],
+      onChain: [getAddress(OWNER_A), getAddress(OWNER_B)],
+    })
+    await invariant('safe-config').run(ctx)
+    expect(ctx.errors).toHaveLength(1)
+    expect(ctx.errors[0]).toContain('duplicate')
+  })
+
+  it('does not print the match line on any route that could not compare', async () => {
+    // A refusal and a "matches config" line together read as a check that ran
+    // and agreed. Every refusal route has to suppress it, not just one, so this
+    // is driven over all three. Asserted on rendered output because that is
+    // where the two can contradict each other.
+    const capture = async (ctx: IHealthCheckContext): Promise<string> => {
+      const printed: string[] = []
+      const success = consola.success
+      consola.success = ((message: unknown) => {
+        printed.push(String(message))
+      }) as typeof consola.success
+      try {
+        await invariant('safe-config').run(ctx)
+      } finally {
+        consola.success = success
+      }
+      return printed.join('\n')
+    }
+
+    const routes: Array<[string, IHealthCheckContext]> = [
+      [
+        'no configured owners',
+        makeSafeCtx({ configured: [], onChain: [OWNER_A] }),
+      ],
+      [
+        'an unusable entry',
+        makeSafeCtx({
+          configured: [OWNER_A, '0xnot-an-address'],
+          onChain: [getAddress(OWNER_A)],
+        }),
+      ],
+      [
+        'a duplicated entry',
+        makeSafeCtx({
+          configured: [OWNER_A, OWNER_A],
+          onChain: [getAddress(OWNER_A)],
+        }),
+      ],
+    ]
+
+    for (const [route, ctx] of routes) {
+      const printed = await capture(ctx)
+      expect(printed, route).not.toContain('owner set matches')
+      expect(ctx.errors.length, route).toBeGreaterThan(0)
+    }
+
+    // Paired presence: the line does appear when the comparison does run, so
+    // none of the above passes on a call that printed nothing at all.
+    const clean = makeSafeCtx({
+      configured: [OWNER_A],
+      onChain: [getAddress(OWNER_A)],
+    })
+    expect(await capture(clean)).toContain('owner set matches')
+    expect(clean.errors).toEqual([])
+  })
+
+  it('reaches the run summary when no Safe address is configured', async () => {
+    // A skipped check must not read like a passing one: the summary counts what
+    // the context collected, so a raw `consola.warn` would be invisible there.
+    const ctx = makeSafeCtx({
+      configured: [OWNER_A],
+      onChain: [INTRUDER],
+      safeAddress: undefined,
+    })
+    await invariant('safe-config').run(ctx)
+
+    expect(ctx.errors).toEqual([])
+    expect(ctx.warnings).toHaveLength(1)
+    expect(ctx.warnings[0]).toContain('No SAFE address configured')
+  })
+
+  it('keeps failing a threshold below the floor', async () => {
+    const ctx = makeSafeCtx({
+      configured: [OWNER_A],
+      onChain: [OWNER_A],
+      threshold: BigInt(1),
+    })
+    await invariant('safe-config').run(ctx)
+    expect(ctx.errors).toHaveLength(1)
+    expect(ctx.errors[0]).toContain('threshold')
   })
 })
