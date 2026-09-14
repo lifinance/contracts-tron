@@ -54,6 +54,7 @@ import {
   loadCompiledFacetSelectors,
   resolveLiveFacets,
 } from './shared/facetPeripheryCouplings'
+import { sanitizeProvenanceText } from './shared/git-provenance'
 import { getCorePeriphery } from './shared/globalContractLists'
 import {
   collectImmutableBindingChecks,
@@ -1575,8 +1576,8 @@ async function readAddressGetter(
     // parseTronAddressOutput returns the last non-diagnostic line, so unexpected tooling output
     // that still exits 0 would arrive here as a "value". Throwing keeps that an unverified
     // warning instead of an error-severity mismatch against a line of prose.
-    // A zero address in any encoding is a real answer the caller must report as an error, so
-    // it passes the shape check; anything else non-base58 is unusable output.
+    // A zero address in any encoding is a real answer for the caller to judge, so it passes the
+    // shape check; anything else non-base58 is unusable output.
     if (
       !isZeroAddressValue(parsed) &&
       (!parsed.startsWith('T') || parsed.length !== 34)
@@ -1754,6 +1755,27 @@ async function resolvePendingRegistrations(
     if (matching.length > 0) forDiamond.set(address, matching)
   }
   return forDiamond
+}
+
+/**
+ * Names a `safeOwners` entry that cannot be used, for an operator to read.
+ *
+ * Carries the position and the length rather than relying on the rendering being visible:
+ * sanitising strips most invisible characters but not all of them (a zero-width joiner and
+ * a Hangul filler both survive it and occupy no width), and a value that renders blank is
+ * indistinguishable from the next one inside a comma-joined list. Position and length
+ * identify the line to fix whatever the characters are.
+ * @param entry - the unusable entry, whatever it held
+ * @param index - its position in `safeOwners`, as an operator counts them
+ * @returns A control-character-free description that identifies the entry
+ */
+const describeConfigEntry = (entry: unknown, index: number): string => {
+  const raw = String(entry)
+  const size = `${raw.length} char${raw.length === 1 ? '' : 's'}`
+  const rendered = sanitizeProvenanceText(raw)
+  return rendered === ''
+    ? `entry ${index} (nothing printable, ${size})`
+    : `entry ${index} "${rendered}" (${size})`
 }
 
 /**
@@ -2207,7 +2229,17 @@ export const HEALTH_CHECK_INVARIANTS: IHealthCheckInvariant[] = [
         // Not present on this chain — nothing to compare.
         if (!address) continue
 
-        if (!check.expectedAddress) {
+        // `allowToDeployWithZeroAddress` makes a zero binding a declared value rather than drift,
+        // so an explicit zero is an expectation to assert. An absent key is one too: whichever
+        // overload the deploy script used, no deploy can have produced a non-zero binding from a
+        // key config does not carry. A config file that could not be read states neither.
+        const expectsZeroAddress =
+          check.zeroAddressAllowed &&
+          check.configFileLoaded &&
+          (check.expectedAddress === null ||
+            isZeroAddressValue(check.expectedAddress))
+
+        if (!check.expectedAddress && !expectsZeroAddress) {
           ctx.logWarn(
             `${check.contractName} is deployed but ${check.configFileName} has no ${check.resolvedKeyInConfigFile} value for this network — cannot verify ${check.getter}()`
           )
@@ -2218,18 +2250,21 @@ export const HEALTH_CHECK_INVARIANTS: IHealthCheckInvariant[] = [
         // only known to be non-empty strings, so a malformed one throws here — folding that
         // into the read's catch would report a broken config entry as an unverified binding
         // and let this error-severity check pass on exactly the drift it exists to catch.
-        let expectedValue: string
-        try {
-          expectedValue =
-            ctx.isTron && tronWeb
-              ? ensureTronAddress(check.expectedAddress, tronWeb)
-              : getAddress(check.expectedAddress as Address)
-        } catch {
-          ctx.logError(
-            `${check.configFileName} ${check.resolvedKeyInConfigFile} is not a valid address (${check.expectedAddress}), so ${check.contractName}.${check.getter}() cannot be verified`
-          )
-          continue
-        }
+        // A zero expectation skips normalization: `isZeroAddressValue` already answers in every
+        // encoding a read can return, including both Tron ones.
+        let expectedValue: string | null = null
+        if (!expectsZeroAddress)
+          try {
+            expectedValue =
+              ctx.isTron && tronWeb
+                ? ensureTronAddress(check.expectedAddress as string, tronWeb)
+                : getAddress(check.expectedAddress as Address)
+          } catch {
+            ctx.logError(
+              `${check.configFileName} ${check.resolvedKeyInConfigFile} is not a valid address (${check.expectedAddress}), so ${check.contractName}.${check.getter}() cannot be verified`
+            )
+            continue
+          }
 
         try {
           const { value: onChainValue, getterUsed } = await readBindingValue(
@@ -2242,7 +2277,21 @@ export const HEALTH_CHECK_INVARIANTS: IHealthCheckInvariant[] = [
           // build they differ, and the reader needs to know which contract version was read.
           const readLabel = `${check.contractName}.${getterUsed}()`
 
-          if (isZeroAddressValue(onChainValue))
+          const bindingIsZero = isZeroAddressValue(onChainValue)
+
+          if (expectsZeroAddress && bindingIsZero)
+            consola.success(
+              `${readLabel} is the zero address, as ${check.configFileName} declares`
+            )
+          else if (expectsZeroAddress)
+            ctx.logError(
+              `${readLabel} is ${onChainValue} but ${
+                check.expectedAddress === null
+                  ? `${check.configFileName} carries no ${check.resolvedKeyInConfigFile} value for this network`
+                  : `${check.configFileName} ${check.resolvedKeyInConfigFile} is the zero address`
+              }`
+            )
+          else if (bindingIsZero)
             ctx.logError(
               `${readLabel} is the zero address, expected ${expectedValue} from ${check.configFileName} ${check.resolvedKeyInConfigFile}`
             )
@@ -3298,12 +3347,15 @@ export const HEALTH_CHECK_INVARIANTS: IHealthCheckInvariant[] = [
     },
     run: async (ctx) => {
       if (!ctx.networkConfig.safeAddress) {
-        consola.warn('SAFE address not configured')
+        // `ctx.logWarn`, not `consola`: the run summary counts only what the
+        // context collected, so a raw warn makes a network that skipped this
+        // check read as one that passed it.
+        ctx.logWarn(`No SAFE address configured, cannot check the owner set`)
         return
       }
       if (!ctx.publicClient) return
 
-      const safeOwners = ctx.globalConfig.safeOwners
+      const safeOwners = ctx.globalConfig.safeOwners ?? []
       const safeAddress = ctx.networkConfig.safeAddress
 
       try {
@@ -3313,18 +3365,86 @@ export const HEALTH_CHECK_INVARIANTS: IHealthCheckInvariant[] = [
           safeAddress as Address
         )
 
-        for (const o in safeOwners) {
-          const safeOwnerAddr = safeOwners[o]
-          if (!safeOwnerAddr) continue
-          const safeOwner = getAddress(safeOwnerAddr)
-          const isOwner = safeInfo.owners.some(
-            (owner) => getAddress(owner) === safeOwner
-          )
-          if (!isOwner)
-            ctx.logError(`SAFE owner ${safeOwner} not in SAFE configuration`)
-          else
-            consola.success(`SAFE owner ${safeOwner} is in SAFE configuration`)
+        // Checksummed on both sides, because the two sources disagree on case:
+        // `getOwners()` returns whatever the node encodes and the config file is
+        // hand-written.
+        const configured = new Set<string>()
+        const unusable: string[] = []
+        let duplicates = 0
+        for (const [index, entry] of safeOwners.entries()) {
+          // A blank entry leaves the configured set incomplete by exactly the
+          // argument that governs an unparseable one, so it takes the same
+          // route: comparing against a partial set names a legitimate owner as
+          // unexpected.
+          if (!entry) {
+            unusable.push(describeConfigEntry(entry, index))
+            continue
+          }
+          try {
+            const normalised = getAddress(entry)
+            if (configured.has(normalised)) duplicates += 1
+            configured.add(normalised)
+          } catch {
+            unusable.push(describeConfigEntry(entry, index))
+          }
         }
+
+        const onChain = new Set<string>()
+        for (const owner of safeInfo.owners) onChain.add(getAddress(owner))
+
+        let mismatches = 0
+        const report = (message: string): void => {
+          mismatches += 1
+          ctx.logError(message)
+        }
+
+        for (const safeOwner of configured)
+          if (!onChain.has(safeOwner))
+            report(
+              `SAFE owner ${safeOwner} is in config/global.json but is NOT an owner of ${safeAddress} on chain`
+            )
+
+        if (unusable.length > 0)
+          // Reported instead of compared: an incomplete configured set would
+          // name an on-chain owner as unexpected when it may be configured and
+          // merely mistyped.
+          report(
+            `Cannot check ${safeAddress} for unexpected owners: ${
+              unusable.length
+            } entr${
+              unusable.length === 1 ? 'y' : 'ies'
+            } in config/global.json safeOwners ${
+              unusable.length === 1 ? 'is' : 'are'
+            } not a valid address (${unusable.join(
+              ', '
+            )}). An owner added to the Safe stays invisible until the full set can be compared.`
+          )
+        else if (configured.size === 0)
+          // An empty expected set agrees with every on-chain set there is.
+          report(
+            `Cannot check ${safeAddress} for unexpected owners: config/global.json lists no safeOwners`
+          )
+        else
+          for (const safeOwner of onChain)
+            if (!configured.has(safeOwner))
+              report(
+                `SAFE owner ${safeOwner} is an owner of ${safeAddress} on chain but is NOT in config/global.json`
+              )
+
+        // Set equality pins the distinct owners, not the entry count, so a
+        // duplicated entry is outside it: the sets agree while config names
+        // fewer distinct owners than it has entries.
+        if (duplicates > 0)
+          report(
+            `config/global.json safeOwners lists ${duplicates} duplicate entr${
+              duplicates === 1 ? 'y' : 'ies'
+            }, so it names fewer distinct owners than it has entries`
+          )
+
+        if (mismatches === 0)
+          consola.success(
+            `SAFE owner set matches config/global.json (${onChain.size} owner(s))`
+          )
 
         if (safeInfo.threshold < BigInt(SAFE_THRESHOLD))
           ctx.logError(

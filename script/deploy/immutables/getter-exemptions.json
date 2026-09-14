@@ -1,0 +1,12 @@
+{
+  "EmergencyPauseFacet.pauserWallet": "a LI.FI-operated wallet rather than an external counterparty; covered by the wallet-role checks",
+  "GasZipPeriphery.LIFI_DIAMOND": "resolved from the deploy log, not config; covered by the periphery presence and registry checks",
+  "LiFiDEXAggregator.BENTO_BOX": "no config value exists to compare against — every deployment passes address(0) for _bentoBox by design",
+  "Permit2Proxy.LIFI_DIAMOND": "resolved from the deploy log, not config; covered by the periphery presence and registry checks",
+  "ReceiverAcrossV3.executor": "resolved from the deploy log, not config; covered by the periphery presence and registry checks",
+  "ReceiverAcrossV4.EXECUTOR": "resolved from the deploy log, not config; covered by the periphery presence and registry checks",
+  "ReceiverChainflip.executor": "resolved from the deploy log, not config; covered by the periphery presence and registry checks",
+  "ReceiverOIF.EXECUTOR": "resolved from the deploy log, not config; covered by the periphery presence and registry checks",
+  "ReceiverStargateV2.executor": "resolved from the deploy log, not config; covered by the periphery presence and registry checks",
+  "TokenWrapper.CONVERTER": "bound conditionally (falls back to WRAPPED_TOKEN when no converter is configured), so no single config key states the expected value"
+}
