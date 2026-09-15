@@ -233,19 +233,31 @@ jobs:
 
           ##### GitHub builds the merge commit, so it carries GitHub's signature and
           ##### satisfies the required_signatures rule on main (EXSC-1019).
-          MERGE_SHA=$(gh api -X POST "repos/${GITHUB_REPOSITORY}/merges" \
+          MERGE_JSON=$(gh api -X POST "repos/${GITHUB_REPOSITORY}/merges" \
             -f base=main \
             -f head="${BRANCH}" \
-            -f commit_message="chore: sync upstream contracts@${UPSTREAM_SHA}" \
-            -q .sha)
+            -f commit_message="chore: sync upstream contracts@${UPSTREAM_SHA}")
 
           ##### /merges answers 204 (empty body) when base already contains head,
-          ##### which gh reports as success. Without this the empty SHA falls through
-          ##### to the tree check and reports a tree mismatch that never happened.
-          if [ -z "${MERGE_SHA}" ]; then
+          ##### which gh reports as success. Without this the empty response falls
+          ##### through to the tree check and reports a mismatch that never happened.
+          if [ -z "${MERGE_JSON}" ]; then
             echo -e "\033[31m/merges returned no commit (204: main already contains ${BRANCH}); nothing was merged\033[0m" >&2
             exit 1
           fi
+
+          ##### A commit now exists on main. Recorded before the tree check so the
+          ##### Slack alert can say whether main actually moved instead of guessing
+          ##### from this step's outcome.
+          echo "merged=true" >> "$GITHUB_OUTPUT"
+
+          ##### Tree and parent come from the POST response itself rather than a
+          ##### re-fetch plus rev-parse: it is the same commit either way, and reading
+          ##### what GitHub reports it built needs no round trip and cannot fail on an
+          ##### object that is not local yet.
+          MERGE_SHA=$(jq -r '.sha' <<<"${MERGE_JSON}")
+          MERGE_TREE=$(jq -r '.commit.tree.sha' <<<"${MERGE_JSON}")
+          MERGE_PARENT=$(jq -r '.parents[0].sha' <<<"${MERGE_JSON}")
 
           ##### GitHub resolves the merge on its own side, so the tree it produced is
           ##### not automatically the tree forge ran against. Fail loudly if they
@@ -256,14 +268,6 @@ jobs:
           ##### atomic. If main moves in that window, main ends up carrying a merge
           ##### commit the suite never ran against and a human has to decide whether to
           ##### revert it - hence the two messages below distinguishing the cases.
-          git fetch origin main
-
-          ##### Resolved into variables rather than inlined into the `if`: inside a
-          ##### test expression errexit is suppressed, so an unreachable object would
-          ##### yield "" and be reported as a race that never happened.
-          MERGE_TREE=$(git rev-parse "${MERGE_SHA}^{tree}")
-          MERGE_PARENT=$(git rev-parse "${MERGE_SHA}^1")
-
           if [ "${MERGE_TREE}" != "${MERGED_TREE}" ]; then
             if [ "${MERGE_PARENT}" != "${BASE_SHA}" ]; then
               echo -e "\033[31mmain moved to ${MERGE_PARENT} between the base check and the merge; ${MERGE_SHA} is now ON MAIN but was never tested - revert or re-run\033[0m" >&2
@@ -287,26 +291,75 @@ jobs:
           gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${BRANCH}" \
             || echo "sync branch ${BRANCH} was already gone or could not be deleted; continuing"
 
-      - name: Hand off failing merge to PR
-        id: handoff-tests
-        # Clean merge but red tests: never touch main; hand upstream's commits to a
-        # sync branch and open a PR where all required checks + review apply
-        if: steps.merge.outputs.verdict == 'clean' && steps.verify.outcome == 'failure'
+      ##### Both hand-off paths - red tests against a clean merge, and a conflicted
+      ##### merge - do the same thing: leave main alone, publish upstream's commits to
+      ##### the sync branch, and open a PR where all required checks and review apply.
+      ##### Only the title and the middle of the body differ.
+      - name: Hand off to a PR
+        id: handoff
+        if: >-
+          steps.merge.outputs.verdict == 'conflict'
+          || (steps.merge.outputs.verdict == 'clean' && steps.verify.outcome == 'failure')
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           BRANCH: ${{ steps.merge.outputs.branch }}
           DATE: ${{ steps.merge.outputs.date }}
           UPSTREAM_SHA: ${{ steps.merge.outputs.upstream_sha }}
+          VERDICT: ${{ steps.merge.outputs.verdict }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
 
-          ##### --no-verify: the .husky/pre-push hook installed by `bun install` above
-          ##### type-checks script/**, so an upstream change that breaks type-checking
-          ##### would block the very PR that exists to surface that breakage.
+          ##### --no-verify: on the red-tests path `bun install` above set
+          ##### core.hooksPath, and .husky/pre-push type-checks script/**, so an upstream
+          ##### change that breaks type-checking would veto the very PR raised to surface
+          ##### that breakage. On the conflict path the hook was never installed at all -
+          ##### leaving the flag off there would be relying on that accident.
           git push --no-verify origin "refs/remotes/upstream/main:refs/heads/${BRANCH}"
 
-          cat > pr-body.md <<BODY
+          ##### Recorded as facts rather than inferred later from this step's outcome:
+          ##### the push and the PR call fail differently, and an alert that cannot tell
+          ##### them apart sends on-call looking for a branch that was never created.
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+
+          if [ "${VERDICT}" = conflict ]; then
+            ##### The conflicted merge is still sitting in the working tree (it was
+            ##### never committed), so the unmerged paths are readable here. Assigned
+            ##### before the heredoc, where errexit still applies, rather than
+            ##### substituted inside it - a silent failure there would render the
+            ##### empty conflict list this workflow already goes out of its way to
+            ##### never produce.
+            CONFLICTS=$(git diff --name-only --diff-filter=U)
+            TITLE="chore: sync upstream contracts (${DATE}) - conflicts need resolution"
+            cat > pr-body.md <<BODY
+          Automated sync from \`lifinance/contracts@${UPSTREAM_SHA}\` hit merge conflicts.
+
+          This branch carries upstream's history as-is - the conflict markers were NOT
+          committed - so every commit on it is already signed. Resolve by merging
+          \`main\` into the branch and pushing a signed resolution:
+
+          \`\`\`bash
+          git fetch origin
+          git checkout ${BRANCH}
+          git merge origin/main   # resolve the conflicts listed below in your editor
+          git add -u              # required: git commit refuses while paths are unmerged
+          git commit -S --no-edit
+          git push
+          \`\`\`
+
+          \`git add -u\` stages every resolved path, including deletions, without sweeping
+          in the \`.orig\` backups \`git mergetool\` leaves behind - this repo's
+          \`.gitignore\` does not cover them, so \`git add -A\` would commit them.
+
+          Conflicting paths:
+
+          \`\`\`
+          ${CONFLICTS}
+          \`\`\`
+          BODY
+          else
+            TITLE="chore: sync upstream contracts (${DATE}) - tests failing, review required"
+            cat > pr-body.md <<BODY
           Automated sync from \`lifinance/contracts@${UPSTREAM_SHA}\` merged cleanly but the
           forge test suite FAILED against the merge result, so it was not merged into
           \`main\`. Test log: ${RUN_URL}
@@ -327,6 +380,10 @@ jobs:
 
           Fix the breakage on this branch (or coordinate an upstream fix), then merge via
           the normal review process.
+          BODY
+          fi
+
+          cat >> pr-body.md <<BODY
 
           > [!IMPORTANT]
           > Merge this PR with a **merge commit**. Squash and rebase drop the upstream
@@ -339,82 +396,74 @@ jobs:
 
           gh pr create \
             --repo lifinance/contracts-tron \
-            --title "chore: sync upstream contracts (${DATE}) - tests failing, review required" \
+            --title "${TITLE}" \
             --body-file pr-body.md \
             --base main \
             --head "${BRANCH}"
 
-      - name: Open PR for manual conflict resolution
-        id: handoff-conflict
-        if: steps.merge.outputs.verdict == 'conflict'
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          BRANCH: ${{ steps.merge.outputs.branch }}
-          DATE: ${{ steps.merge.outputs.date }}
-          UPSTREAM_SHA: ${{ steps.merge.outputs.upstream_sha }}
-        run: |
-          set -euo pipefail
-
-          ##### The conflicted merge is still sitting in the working tree (it was
-          ##### never committed), so the unmerged paths are readable here.
-          CONFLICTS=$(git diff --name-only --diff-filter=U)
-
-          ##### --no-verify for symmetry with the other push sites; on this path the
-          ##### hook is not even installed (bun install never runs when the merge
-          ##### conflicts), so relying on that would be relying on an accident.
-          git push --no-verify origin "refs/remotes/upstream/main:refs/heads/${BRANCH}"
-
-          cat > pr-body.md <<BODY
-          Automated sync from \`lifinance/contracts@${UPSTREAM_SHA}\` hit merge conflicts.
-
-          This branch carries upstream's history as-is - the conflict markers were NOT
-          committed - so every commit on it is already signed. Resolve by merging
-          \`main\` into the branch and pushing a signed resolution:
-
-          \`\`\`bash
-          git fetch origin
-          git checkout ${BRANCH}
-          git merge origin/main   # resolve the conflicts listed below in your editor
-          git add -A              # required: git commit refuses while paths are unmerged
-          git commit -S --no-edit
-          git push
-          \`\`\`
-
-          Conflicting paths:
-
-          \`\`\`
-          ${CONFLICTS}
-          \`\`\`
-
-          > [!IMPORTANT]
-          > Merge this PR with a **merge commit**. Squash and rebase drop the upstream
-          > parent, so the merge base never advances and every later sync re-conflicts
-          > on the entire fork delta.
-
-          See the Notion 'Tron deployments' page (section: The contracts-tron Fork) and
-          EXSC-587 for the sync/versioning rules.
-          BODY
-
-          gh pr create \
-            --repo lifinance/contracts-tron \
-            --title "chore: sync upstream contracts (${DATE}) - conflicts need resolution" \
-            --body-file pr-body.md \
-            --base main \
-            --head "${BRANCH}"
+          echo "pr=true" >> "$GITHUB_OUTPUT"
 
       ##### A sync that never lands is invisible: the job is a weekly cron nobody
-      ##### watches, and the two hand-off paths exit successfully. Alert on any run
-      ##### that did not reach main, whatever the reason.
-      - name: Notify Slack when the sync did not land on main
+      ##### watches, and the hand-off path exits successfully. Alert on any run that
+      ##### did not reach main, whatever the reason.
+      #####
+      ##### Composed in a shell step rather than inline in the payload below: as one
+      ##### expression this was a single unreviewable line, and every branch of it
+      ##### inferred world-state from a step outcome. A step that fails at its `git
+      ##### push` and one that fails at `gh pr create` share an outcome but leave the
+      ##### repo in opposite states, so the branches below read the facts those steps
+      ##### recorded - whether a branch was pushed, whether a PR exists, whether a
+      ##### commit actually landed on main - instead of guessing from success/failure.
+      - name: Compose the alert text
+        id: alert
         if: >-
           always() && (failure()
           || steps.merge.outputs.verdict == 'conflict'
           || steps.verify.outcome == 'failure')
+        env:
+          ADVANCE: ${{ steps.advance.outcome }}
+          MERGED: ${{ steps.advance.outputs.merged }}
+          HANDOFF: ${{ steps.handoff.outcome }}
+          PUSHED: ${{ steps.handoff.outputs.pushed }}
+          PR_OPENED: ${{ steps.handoff.outputs.pr }}
+          VERDICT: ${{ steps.merge.outputs.verdict }}
+          BRANCH: ${{ steps.merge.outputs.branch }}
+        run: |
+          set -euo pipefail
+
+          BEHIND="the fork stays behind lifinance/contracts"
+
+          if [ "${ADVANCE}" = failure ] && [ "${MERGED}" = true ]; then
+            ##### The branch is already gone here - the delete step runs on
+            ##### always() - so the only thing on-call can act on is the commit.
+            TEXT="a merge commit is ON MAIN that the suite never ran against; read the run log and revert it"
+          elif [ "${ADVANCE}" = failure ]; then
+            TEXT="the merge never landed; main is untouched and ${BEHIND}"
+          elif [ "${HANDOFF}" != skipped ]; then
+            if [ "${VERDICT}" = conflict ]; then REASON="merge conflicts"; else REASON="tests failed against the merge result"; fi
+            if [ "${PR_OPENED}" = true ]; then
+              TEXT="${REASON}, PR opened; ${BEHIND} until it is merged"
+            elif [ "${PUSHED}" = true ]; then
+              TEXT="${REASON}, but PR creation FAILED; branch ${BRANCH} is pushed and can be picked up by hand"
+            else
+              TEXT="${REASON}, and pushing the sync branch FAILED; nothing was created and ${BEHIND}"
+            fi
+          else
+            TEXT="the job failed before any merge was attempted; ${BEHIND}"
+          fi
+
+          echo "text=${TEXT}" >> "$GITHUB_OUTPUT"
+
+      - name: Notify Slack when the sync did not land on main
+        ##### != skipped, not == success: if composing the text somehow fails, a
+        ##### malformed alert still reaches on-call, whereas gating on success would
+        ##### silently swallow the notification for a sync that did not land.
+        if: always() && steps.alert.outcome != 'skipped'
         uses: slackapi/slack-github-action@485a9d42d3a73031f12ec201c457e2162c45d02d # v2.0.0
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_DEV_SC_GITHUB_CI_NOTIFICATIONS }}
           webhook-type: incoming-webhook
           payload: |
             {
-              "text": ":warning: contracts-tron upstream sync needs attention - ${{ steps.advance.outcome == 'failure' && format('a merge may be ON MAIN that the suite never ran against; read the run log and revert if so (branch {0} may also still exist)', steps.merge.outputs.branch) || steps.handoff-conflict.outcome == 'success' && 'merge conflicts, PR opened; the fork stays behind lifinance/contracts until it is merged' || steps.handoff-conflict.outcome == 'failure' && format('merge conflicts, but PR creation FAILED; branch {0} is already pushed and can be picked up by hand', steps.merge.outputs.branch) || steps.handoff-tests.outcome == 'success' && 'tests failed against the merge result, PR opened; the fork stays behind lifinance/contracts until it is merged' || steps.handoff-tests.outcome == 'failure' && format('tests failed and PR creation FAILED; branch {0} is already pushed and can be picked up by hand', steps.merge.outputs.branch) || 'the job failed before any merge was attempted; the fork stays behind lifinance/contracts' }}: <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|run #${{ github.run_number }}>"
+              "text": ":warning: contracts-tron upstream sync needs attention - ${{ steps.alert.outputs.text }}: <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|run #${{ github.run_number }}>"
             }
