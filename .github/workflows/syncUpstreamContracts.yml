@@ -12,7 +12,7 @@
 #   protection" ruleset (manual one-time setup, see EXSC-587/EXSC-599) - otherwise
 #   this merge is rejected and the job fails.
 # - Clean merge but failing tests: does NOT touch main; hands upstream's commits to
-#   sync/upstream-YYYY-MM-DD-<run> and opens a PR so the breakage is reviewed with
+#   sync/upstream-YYYY-MM-DD-<run>-<attempt> and opens a PR so the breakage is reviewed with
 #   all required checks applied (EXSC-603)
 # - Conflicting merge: opens the same PR and lists the conflicting paths in the
 #   body for whoever resolves it. Conflict markers are never committed.
@@ -51,6 +51,10 @@ jobs:
           # every permission the installation holds.
           permission-contents: write # push the sync branch, merge it into main, delete the branch
           permission-pull-requests: write # open the hand-off PRs
+          # Upstream syncs routinely carry .github/workflows changes (16 files in the
+          # last one). Without this, git rejects the sync-branch push outright:
+          # "refusing to allow a GitHub App to ... without `workflows` permission".
+          permission-workflows: write
 
       - name: Checkout contracts-tron
         # persist-credentials stays on (the zizmor "artipacked" default): the sync
@@ -70,14 +74,25 @@ jobs:
         id: merge
         env:
           RUN_NUMBER: ${{ github.run_number }}
+          # run_number is identical across re-runs of the same run, so the branch
+          # name needs the attempt too or "Re-run failed jobs" collides with the
+          # branch the first attempt already pushed.
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
 
+          ##### Assigned first, not inlined into the echo below: a failing
+          ##### substitution inside `echo` still exits 0, which would write an empty
+          ##### value and surface several steps later as a mangled commit message.
+          UPSTREAM_SHA=$(git rev-parse --short upstream/main)
+          BASE_SHA=$(git rev-parse HEAD)
+          DATE=$(date -u +%Y-%m-%d)
+
           {
-            echo "upstream_sha=$(git rev-parse --short upstream/main)"
-            echo "base_sha=$(git rev-parse HEAD)"
-            echo "date=$(date -u +%Y-%m-%d)"
-            echo "branch=sync/upstream-$(date -u +%Y-%m-%d)-${RUN_NUMBER}"
+            echo "upstream_sha=${UPSTREAM_SHA}"
+            echo "base_sha=${BASE_SHA}"
+            echo "date=${DATE}"
+            echo "branch=sync/upstream-${DATE}-${RUN_NUMBER}-${RUN_ATTEMPT}"
           } >> "$GITHUB_OUTPUT"
 
           if git merge-base --is-ancestor upstream/main HEAD; then
@@ -91,13 +106,23 @@ jobs:
           ##### required: a fast-forward cannot be stopped by --no-commit alone.
           if git merge upstream/main --no-commit --no-ff; then
             echo -e "\033[32mClean merge, no conflicts\033[0m"
-            echo "verdict=clean" >> "$GITHUB_OUTPUT"
             ##### Record the tree the suite is about to run against, so the merge
             ##### GitHub builds later can be checked against it.
-            echo "merged_tree=$(git write-tree)" >> "$GITHUB_OUTPUT"
-          else
+            MERGED_TREE=$(git write-tree)
+            {
+              echo "verdict=clean"
+              echo "merged_tree=${MERGED_TREE}"
+            } >> "$GITHUB_OUTPUT"
+          elif [ -n "$(git ls-files --unmerged)" ]; then
             echo -e "\033[31mMerge conflicts detected, will hand off to a PR\033[0m"
             echo "verdict=conflict" >> "$GITHUB_OUTPUT"
+          else
+            ##### git merge also exits non-zero for unrelated histories, a dirty
+            ##### tree, or a failed submodule merge. Those leave no unmerged paths,
+            ##### so treating them as conflicts would open a PR with an empty
+            ##### conflict list and bury the real error in the log.
+            echo -e "\033[31mgit merge failed with no conflicting paths; this is not a content conflict - see the error above\033[0m" >&2
+            exit 1
           fi
 
       ##### Pre-merge verification (EXSC-603): a textually clean merge can still
@@ -127,13 +152,6 @@ jobs:
       - name: Install forge Dependencies
         if: steps.merge.outputs.verdict == 'clean'
         run: forge install
-
-      # The .husky/pre-push hook type-checks script/**, which imports generated
-      # typechain/ bindings; without them the sync-branch push below aborts before
-      # it reaches the remote. Mirrors validateScripts.yml.
-      - name: Generate typechain bindings
-        if: steps.merge.outputs.verdict == 'clean'
-        run: bun typechain:incremental
 
       - name: Fetch RPC endpoints from MongoDB
         if: steps.merge.outputs.verdict == 'clean'
@@ -179,6 +197,7 @@ jobs:
           exit 1
 
       - name: Advance main to the merge result
+        id: advance
         if: steps.merge.outputs.verdict == 'clean' && steps.verify.outcome == 'success'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -201,7 +220,10 @@ jobs:
           ##### Publish upstream's commits under a branch in this repo so the merge
           ##### endpoint can reach them. This creates no new commit - every commit on
           ##### the branch is upstream's own, and already signed.
-          git push origin "refs/remotes/upstream/main:refs/heads/${BRANCH}"
+          ##### --no-verify: `bun install` above set core.hooksPath, and .husky/pre-push
+          ##### type-checks a diff range that no longer matches what is being pushed.
+          ##### Nothing here is bot-authored, so the hook has nothing to vet.
+          git push --no-verify origin "refs/remotes/upstream/main:refs/heads/${BRANCH}"
 
           ##### GitHub builds the merge commit, so it carries GitHub's signature and
           ##### satisfies the required_signatures rule on main (EXSC-1019).
@@ -211,18 +233,49 @@ jobs:
             -f commit_message="chore: sync upstream contracts@${UPSTREAM_SHA}" \
             -q .sha)
 
-          ##### GitHub resolves the merge on its own side, so the tree it produced is
-          ##### not automatically the tree forge ran against. Fail loudly if they
-          ##### differ rather than call an untested tree a successful sync.
-          git fetch origin main
-          if [ "$(git rev-parse "${MERGE_SHA}^{tree}")" != "${MERGED_TREE}" ]; then
-            echo -e "\033[31m${MERGE_SHA} is not the tree the suite tested (${MERGED_TREE}); main needs review\033[0m" >&2
+          ##### /merges answers 204 (empty body) when base already contains head,
+          ##### which gh reports as success. Without this the empty SHA falls through
+          ##### to the tree check and reports a tree mismatch that never happened.
+          if [ -z "${MERGE_SHA}" ]; then
+            echo -e "\033[31m/merges returned no commit (204: main already contains ${BRANCH}); nothing was merged\033[0m" >&2
             exit 1
           fi
 
-          gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${BRANCH}"
+          ##### GitHub resolves the merge on its own side, so the tree it produced is
+          ##### not automatically the tree forge ran against. Fail loudly if they
+          ##### differ rather than call an untested tree a successful sync.
+          #####
+          ##### Note this check is necessarily post-hoc: /merges takes no expected-base
+          ##### parameter, so the base-SHA guard above and the POST cannot be made
+          ##### atomic. If main moves in that window, main ends up carrying a merge
+          ##### commit the suite never ran against and a human has to decide whether to
+          ##### revert it - hence the two messages below distinguishing the cases.
+          git fetch origin main
+          if [ "$(git rev-parse "${MERGE_SHA}^{tree}")" != "${MERGED_TREE}" ]; then
+            if [ "$(git rev-parse "${MERGE_SHA}^1")" != "${BASE_SHA}" ]; then
+              echo -e "\033[31mmain moved to $(git rev-parse "${MERGE_SHA}^1") between the base check and the merge; ${MERGE_SHA} is now on main but was never tested - revert or re-run\033[0m" >&2
+            else
+              echo -e "\033[31m${MERGE_SHA} is on main but carries a different tree than the suite tested (${MERGED_TREE}); GitHub resolved the merge differently - needs review\033[0m" >&2
+            fi
+            exit 1
+          fi
+
+      ##### Runs whether or not the merge succeeded: a branch left behind by a failed
+      ##### POST or a failed tree check is never reused (the name carries the run
+      ##### number), so it would linger forever. Tolerant of an already-deleted ref -
+      ##### a failed cleanup must not turn a sync that did land into a red job.
+      - name: Delete the sync branch
+        if: always() && steps.advance.outcome != 'skipped'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          BRANCH: ${{ steps.merge.outputs.branch }}
+        run: |
+          set -euo pipefail
+          gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${BRANCH}" \
+            || echo "sync branch ${BRANCH} was already gone or could not be deleted; continuing"
 
       - name: Hand off failing merge to PR
+        id: handoff-tests
         # Clean merge but red tests: never touch main; hand upstream's commits to a
         # sync branch and open a PR where all required checks + review apply
         if: steps.merge.outputs.verdict == 'clean' && steps.verify.outcome == 'failure'
@@ -235,7 +288,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          git push origin "refs/remotes/upstream/main:refs/heads/${BRANCH}"
+          ##### --no-verify: the .husky/pre-push hook installed by `bun install` above
+          ##### type-checks script/**, so an upstream change that breaks type-checking
+          ##### would block the very PR that exists to surface that breakage.
+          git push --no-verify origin "refs/remotes/upstream/main:refs/heads/${BRANCH}"
 
           cat > pr-body.md <<BODY
           Automated sync from \`lifinance/contracts@${UPSTREAM_SHA}\` merged cleanly but the
@@ -263,6 +319,7 @@ jobs:
             --head "${BRANCH}"
 
       - name: Open PR for manual conflict resolution
+        id: handoff-conflict
         if: steps.merge.outputs.verdict == 'conflict'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -276,7 +333,10 @@ jobs:
           ##### never committed), so the unmerged paths are readable here.
           CONFLICTS=$(git diff --name-only --diff-filter=U)
 
-          git push origin "refs/remotes/upstream/main:refs/heads/${BRANCH}"
+          ##### --no-verify for symmetry with the other push sites; on this path the
+          ##### hook is not even installed (bun install never runs when the merge
+          ##### conflicts), so relying on that would be relying on an accident.
+          git push --no-verify origin "refs/remotes/upstream/main:refs/heads/${BRANCH}"
 
           cat > pr-body.md <<BODY
           Automated sync from \`lifinance/contracts@${UPSTREAM_SHA}\` hit merge conflicts.
@@ -329,5 +389,5 @@ jobs:
           webhook-type: incoming-webhook
           payload: |
             {
-              "text": ":warning: contracts-tron upstream sync did not reach main (${{ steps.merge.outputs.verdict == 'conflict' && 'merge conflicts - PR opened' || steps.verify.outcome == 'failure' && 'tests failed - PR opened' || 'job failed' }}): <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|run #${{ github.run_number }}>. The fork stays behind lifinance/contracts until this is resolved."
+              "text": ":warning: contracts-tron upstream sync did not reach main (${{ steps.handoff-conflict.outcome == 'success' && 'merge conflicts - PR opened' || steps.handoff-conflict.outcome == 'failure' && 'merge conflicts - PR creation FAILED, no branch to pick up' || steps.handoff-tests.outcome == 'success' && 'tests failed - PR opened' || steps.handoff-tests.outcome == 'failure' && 'tests failed - PR creation FAILED, no branch to pick up' || 'job failed' }}): <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|run #${{ github.run_number }}>. The fork stays behind lifinance/contracts until this is resolved."
             }
