@@ -21,6 +21,12 @@
 #   re-conflicts on the whole fork delta.
 # - Known limitation: the pre-merge test run is the same suite as forge-unit-tests.yml
 #   but unsharded (single runner) - slower, which is acceptable for a weekly job
+# - Known cost, accepted: the clean path now pushes a short-lived branch, and
+#   networkRpcsChecker.yml declares a bare `push:` with no branches filter, so each
+#   green sync triggers one extra RPC-check run for a branch deleted seconds later.
+#   That filter belongs in networkRpcsChecker.yml, which is upstream-owned and
+#   byte-identical to lifinance/contracts - changing it here would manufacture a
+#   fork delta on a file that has none. Fix it upstream, not in this repo.
 name: Sync upstream contracts
 
 concurrency:
@@ -251,11 +257,18 @@ jobs:
           ##### commit the suite never ran against and a human has to decide whether to
           ##### revert it - hence the two messages below distinguishing the cases.
           git fetch origin main
-          if [ "$(git rev-parse "${MERGE_SHA}^{tree}")" != "${MERGED_TREE}" ]; then
-            if [ "$(git rev-parse "${MERGE_SHA}^1")" != "${BASE_SHA}" ]; then
-              echo -e "\033[31mmain moved to $(git rev-parse "${MERGE_SHA}^1") between the base check and the merge; ${MERGE_SHA} is now on main but was never tested - revert or re-run\033[0m" >&2
+
+          ##### Resolved into variables rather than inlined into the `if`: inside a
+          ##### test expression errexit is suppressed, so an unreachable object would
+          ##### yield "" and be reported as a race that never happened.
+          MERGE_TREE=$(git rev-parse "${MERGE_SHA}^{tree}")
+          MERGE_PARENT=$(git rev-parse "${MERGE_SHA}^1")
+
+          if [ "${MERGE_TREE}" != "${MERGED_TREE}" ]; then
+            if [ "${MERGE_PARENT}" != "${BASE_SHA}" ]; then
+              echo -e "\033[31mmain moved to ${MERGE_PARENT} between the base check and the merge; ${MERGE_SHA} is now ON MAIN but was never tested - revert or re-run\033[0m" >&2
             else
-              echo -e "\033[31m${MERGE_SHA} is on main but carries a different tree than the suite tested (${MERGED_TREE}); GitHub resolved the merge differently - needs review\033[0m" >&2
+              echo -e "\033[31m${MERGE_SHA} is ON MAIN but carries a different tree than the suite tested (${MERGED_TREE}); GitHub resolved the merge differently - needs review\033[0m" >&2
             fi
             exit 1
           fi
@@ -299,8 +312,21 @@ jobs:
           \`main\`. Test log: ${RUN_URL}
 
           This branch carries upstream's history as-is, with no bot-authored commit, so
-          every commit on it is already signed. Fix the breakage here (or coordinate an
-          upstream fix), then merge via the normal review process.
+          every commit on it is already signed.
+
+          **The branch alone is green.** It is \`upstream/main\` verbatim and carries none
+          of the fork delta, so the failure only exists in the *merge* of this branch with
+          \`main\`. Reproduce it that way before fixing anything:
+
+          \`\`\`bash
+          git fetch origin
+          git checkout ${BRANCH}
+          git merge origin/main --no-edit   # this is the tree the suite failed against
+          forge test
+          \`\`\`
+
+          Fix the breakage on this branch (or coordinate an upstream fix), then merge via
+          the normal review process.
 
           > [!IMPORTANT]
           > Merge this PR with a **merge commit**. Squash and rebase drop the upstream
@@ -348,8 +374,9 @@ jobs:
           \`\`\`bash
           git fetch origin
           git checkout ${BRANCH}
-          git merge origin/main   # resolve the conflicts listed below
-          git commit -S
+          git merge origin/main   # resolve the conflicts listed below in your editor
+          git add -A              # required: git commit refuses while paths are unmerged
+          git commit -S --no-edit
           git push
           \`\`\`
 
@@ -389,5 +416,5 @@ jobs:
           webhook-type: incoming-webhook
           payload: |
             {
-              "text": ":warning: contracts-tron upstream sync did not reach main (${{ steps.handoff-conflict.outcome == 'success' && 'merge conflicts - PR opened' || steps.handoff-conflict.outcome == 'failure' && 'merge conflicts - PR creation FAILED, no branch to pick up' || steps.handoff-tests.outcome == 'success' && 'tests failed - PR opened' || steps.handoff-tests.outcome == 'failure' && 'tests failed - PR creation FAILED, no branch to pick up' || 'job failed' }}): <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|run #${{ github.run_number }}>. The fork stays behind lifinance/contracts until this is resolved."
+              "text": ":warning: contracts-tron upstream sync needs attention - ${{ steps.advance.outcome == 'failure' && format('a merge may be ON MAIN that the suite never ran against; read the run log and revert if so (branch {0} may also still exist)', steps.merge.outputs.branch) || steps.handoff-conflict.outcome == 'success' && 'merge conflicts, PR opened; the fork stays behind lifinance/contracts until it is merged' || steps.handoff-conflict.outcome == 'failure' && format('merge conflicts, but PR creation FAILED; branch {0} is already pushed and can be picked up by hand', steps.merge.outputs.branch) || steps.handoff-tests.outcome == 'success' && 'tests failed against the merge result, PR opened; the fork stays behind lifinance/contracts until it is merged' || steps.handoff-tests.outcome == 'failure' && format('tests failed and PR creation FAILED; branch {0} is already pushed and can be picked up by hand', steps.merge.outputs.branch) || 'the job failed before any merge was attempted; the fork stays behind lifinance/contracts' }}: <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|run #${{ github.run_number }}>"
             }
