@@ -1,16 +1,25 @@
 # Sync upstream contracts
 # - Keeps contracts-tron:main up to date with lifinance/contracts:main (one-way, upstream -> fork)
-# - Clean merge: runs the full forge test suite against the merge result first; only
-#   if tests pass does it push directly to main as the lifi-contracts-tron-sync
-#   GitHub App. Requires the app to be added as a bypass actor on the "main
+# - This workflow never creates a commit (EXSC-1019). It publishes upstream's own
+#   commits - which are already signed - to a sync branch, and lets GitHub build
+#   the merge commit server-side, where it is signed automatically. A merge commit
+#   made locally by the app would be unsigned: an app's [bot] identity is not an
+#   account, so there is no key to register for it and no way to make a local
+#   `git commit -S` produce a GitHub-verified signature.
+# - Clean merge: runs the full forge test suite against the merge result first;
+#   only if tests pass does it advance main through the REST "merge a branch"
+#   endpoint. Requires the app to be added as a bypass actor on the "main
 #   protection" ruleset (manual one-time setup, see EXSC-587/EXSC-599) - otherwise
-#   this push is rejected and the job fails.
-# - Clean merge but failing tests: does NOT push to main; hands the merge commit off
-#   to sync/upstream-YYYY-MM-DD-<run> and opens a PR so the breakage is reviewed
-#   with all required checks applied (EXSC-603)
-# - Conflicting merge: commits the conflict markers to sync/upstream-YYYY-MM-DD-<run>
-#   and opens a PR for manual resolution instead
-# - Known limitation: the pre-push test run is the same suite as forge-unit-tests.yml
+#   this merge is rejected and the job fails.
+# - Clean merge but failing tests: does NOT touch main; hands upstream's commits to
+#   sync/upstream-YYYY-MM-DD-<run> and opens a PR so the breakage is reviewed with
+#   all required checks applied (EXSC-603)
+# - Conflicting merge: opens the same PR and lists the conflicting paths in the
+#   body for whoever resolves it. Conflict markers are never committed.
+# - Sync PRs must be merged WITH A MERGE COMMIT. Squash and rebase drop the
+#   upstream parent, so the merge base never advances and every later sync
+#   re-conflicts on the whole fork delta.
+# - Known limitation: the pre-merge test run is the same suite as forge-unit-tests.yml
 #   but unsharded (single runner) - slower, which is acceptable for a weekly job
 name: Sync upstream contracts
 
@@ -29,7 +38,7 @@ jobs:
   sync-upstream:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # required to push the merge commit / sync branch
+      contents: write # required to push the sync branch and merge it into main
       pull-requests: write # required to open a PR on merge conflicts
     steps:
       - name: Generate app token
@@ -38,18 +47,19 @@ jobs:
         with:
           app-id: ${{ secrets.TRON_SYNC_APP_ID }}
           private-key: ${{ secrets.TRON_SYNC_APP_PRIVATE_KEY }}
+          # Narrow the token to what this job does; without these it inherits
+          # every permission the installation holds.
+          permission-contents: write # push the sync branch, merge it into main, delete the branch
+          permission-pull-requests: write # open the hand-off PRs
 
       - name: Checkout contracts-tron
+        # persist-credentials stays on (the zizmor "artipacked" default): the sync
+        # branch is pushed with git, which needs the app token left in the remote.
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           token: ${{ steps.app-token.outputs.token }}
           fetch-depth: 0
           ref: main
-
-      - name: Configure git identity
-        run: |
-          git config user.name "lifi-contracts-tron-sync[bot]"
-          git config user.email "lifi-contracts-tron-sync[bot]@users.noreply.github.com"
 
       - name: Fetch upstream lifinance/contracts
         run: |
@@ -58,55 +68,72 @@ jobs:
 
       - name: Attempt merge
         id: merge
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
-          UPSTREAM_SHA=$(git rev-parse --short upstream/main)
-          echo "upstream_sha=${UPSTREAM_SHA}" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
 
-          if git merge upstream/main --no-edit -m "chore: sync upstream contracts@${UPSTREAM_SHA}"; then
-            echo -e "\033[32mClean merge, no conflicts\033[0m"
-            echo "conflict=false" >> "$GITHUB_OUTPUT"
-          else
-            echo -e "\033[31mMerge conflicts detected, will hand off to a PR\033[0m"
-            echo "conflict=true" >> "$GITHUB_OUTPUT"
+          {
+            echo "upstream_sha=$(git rev-parse --short upstream/main)"
+            echo "base_sha=$(git rev-parse HEAD)"
+            echo "date=$(date -u +%Y-%m-%d)"
+            echo "branch=sync/upstream-$(date -u +%Y-%m-%d)-${RUN_NUMBER}"
+          } >> "$GITHUB_OUTPUT"
+
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo -e "\033[32mAlready up to date with upstream, nothing to sync\033[0m"
+            echo "verdict=up-to-date" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
-      ##### Pre-push verification (EXSC-603): a textually clean merge can still
+          ##### --no-commit --no-ff resolves the merge into the working tree so the
+          ##### suite can run against it, without ever creating a commit. --no-ff is
+          ##### required: a fast-forward cannot be stopped by --no-commit alone.
+          if git merge upstream/main --no-commit --no-ff; then
+            echo -e "\033[32mClean merge, no conflicts\033[0m"
+            echo "verdict=clean" >> "$GITHUB_OUTPUT"
+          else
+            echo -e "\033[31mMerge conflicts detected, will hand off to a PR\033[0m"
+            echo "verdict=conflict" >> "$GITHUB_OUTPUT"
+          fi
+
+      ##### Pre-merge verification (EXSC-603): a textually clean merge can still
       ##### break the fork (Tron-specific divergence vs upstream changes), so the
       ##### full test suite must pass against the merge result before anything
       ##### lands on main. Setup mirrors forge-unit-tests.yml, unsharded.
       - name: Sync submodules to merge result
-        if: steps.merge.outputs.conflict == 'false'
+        if: steps.merge.outputs.verdict == 'clean'
         run: git submodule update --init --recursive
 
       - name: Set up Bun
-        if: steps.merge.outputs.conflict == 'false'
+        if: steps.merge.outputs.verdict == 'clean'
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
         with:
           bun-version-file: package.json
 
       - name: Install dev dependencies
-        if: steps.merge.outputs.conflict == 'false'
+        if: steps.merge.outputs.verdict == 'clean'
         run: bun install --frozen-lockfile
 
       - name: Install Foundry
-        if: steps.merge.outputs.conflict == 'false'
+        if: steps.merge.outputs.verdict == 'clean'
         uses: ./.github/actions/setup-foundry
         with:
           cache-key-suffix: sync-upstream
 
       - name: Install forge Dependencies
-        if: steps.merge.outputs.conflict == 'false'
+        if: steps.merge.outputs.verdict == 'clean'
         run: forge install
 
       # The .husky/pre-push hook type-checks script/**, which imports generated
-      # typechain/ bindings; without them the push below aborts before it reaches
-      # the remote. Mirrors validateScripts.yml.
+      # typechain/ bindings; without them the sync-branch push below aborts before
+      # it reaches the remote. Mirrors validateScripts.yml.
       - name: Generate typechain bindings
-        if: steps.merge.outputs.conflict == 'false'
+        if: steps.merge.outputs.verdict == 'clean'
         run: bun typechain:incremental
 
       - name: Fetch RPC endpoints from MongoDB
-        if: steps.merge.outputs.conflict == 'false'
+        if: steps.merge.outputs.verdict == 'clean'
         run: |
           # Run the fetch-rpcs.ts script to update .env with RPC endpoint variables
           # This will fetch prioritized RPCs from MongoDB, or fall back to public RPCs from networks.json if MongoDB is unavailable
@@ -129,7 +156,7 @@ jobs:
 
       - name: Run forge tests against merge result
         id: verify
-        if: steps.merge.outputs.conflict == 'false'
+        if: steps.merge.outputs.verdict == 'clean'
         # continue-on-error so a red suite routes to the PR-handoff step below
         # instead of failing the job before the merge result is preserved
         continue-on-error: true
@@ -148,60 +175,139 @@ jobs:
           done
           exit 1
 
-      - name: Push directly to main
-        if: steps.merge.outputs.conflict == 'false' && steps.verify.outcome == 'success'
-        run: git push origin main
-
-      - name: Hand off failing merge to PR
-        # Clean merge but red tests: never push to main; preserve the already-committed
-        # merge on a sync branch and open a PR where all required checks + review apply
-        if: steps.merge.outputs.conflict == 'false' && steps.verify.outcome == 'failure'
+      - name: Advance main to the merge result
+        if: steps.merge.outputs.verdict == 'clean' && steps.verify.outcome == 'success'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          BRANCH: ${{ steps.merge.outputs.branch }}
+          BASE_SHA: ${{ steps.merge.outputs.base_sha }}
+          UPSTREAM_SHA: ${{ steps.merge.outputs.upstream_sha }}
         run: |
-          DATE=$(date -u +%Y-%m-%d)
-          BRANCH="sync/upstream-${DATE}-${{ github.run_number }}"
+          set -euo pipefail
 
-          git branch "${BRANCH}"
-          git push origin "${BRANCH}"
+          ##### main must still be where it was when the suite ran, or the commit
+          ##### GitHub builds below is not the tree forge tested.
+          git fetch origin main
+          CURRENT_SHA=$(git rev-parse origin/main)
+          if [ "${CURRENT_SHA}" != "${BASE_SHA}" ]; then
+            echo -e "\033[31mmain moved from ${BASE_SHA} to ${CURRENT_SHA} while the suite ran; refusing to merge an untested result\033[0m" >&2
+            exit 1
+          fi
+
+          ##### Publish upstream's commits under a branch in this repo so the merge
+          ##### endpoint can reach them. This creates no new commit - every commit on
+          ##### the branch is upstream's own, and already signed.
+          git push origin "refs/remotes/upstream/main:refs/heads/${BRANCH}"
+
+          ##### GitHub builds the merge commit, so it carries GitHub's signature and
+          ##### satisfies the required_signatures rule on main (EXSC-1019).
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/merges" \
+            -f base=main \
+            -f head="${BRANCH}" \
+            -f commit_message="chore: sync upstream contracts@${UPSTREAM_SHA}"
+
+          gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${BRANCH}"
+
+      - name: Hand off failing merge to PR
+        # Clean merge but red tests: never touch main; hand upstream's commits to a
+        # sync branch and open a PR where all required checks + review apply
+        if: steps.merge.outputs.verdict == 'clean' && steps.verify.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          BRANCH: ${{ steps.merge.outputs.branch }}
+          DATE: ${{ steps.merge.outputs.date }}
+          UPSTREAM_SHA: ${{ steps.merge.outputs.upstream_sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          git push origin "refs/remotes/upstream/main:refs/heads/${BRANCH}"
+
+          cat > pr-body.md <<BODY
+          Automated sync from \`lifinance/contracts@${UPSTREAM_SHA}\` merged cleanly but the
+          forge test suite FAILED against the merge result, so it was not merged into
+          \`main\`. Test log: ${RUN_URL}
+
+          This branch carries upstream's history as-is, with no bot-authored commit, so
+          every commit on it is already signed. Fix the breakage here (or coordinate an
+          upstream fix), then merge via the normal review process.
+
+          > [!IMPORTANT]
+          > Merge this PR with a **merge commit**. Squash and rebase drop the upstream
+          > parent, so the merge base never advances and every later sync re-conflicts
+          > on the entire fork delta.
+
+          See the Notion 'Tron deployments' page (section: The contracts-tron Fork) and
+          EXSC-587/EXSC-603 for the sync rules.
+          BODY
 
           gh pr create \
             --repo lifinance/contracts-tron \
             --title "chore: sync upstream contracts (${DATE}) - tests failing, review required" \
-            --body "Automated sync from \`lifinance/contracts@${{ steps.merge.outputs.upstream_sha }}\` merged cleanly but the forge test suite FAILED against the merge result, so it was not pushed to main. Test log: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Fix the breakage on this branch (or coordinate an upstream fix), then merge via the normal review process. See the Notion 'Tron deployments' page (section: The contracts-tron Fork) and EXSC-587/EXSC-603 for the sync rules." \
+            --body-file pr-body.md \
             --base main \
             --head "${BRANCH}"
 
-      - name: Commit conflicts and open PR
-        if: steps.merge.outputs.conflict == 'true'
+      - name: Open PR for manual conflict resolution
+        if: steps.merge.outputs.verdict == 'conflict'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          BRANCH: ${{ steps.merge.outputs.branch }}
+          DATE: ${{ steps.merge.outputs.date }}
+          UPSTREAM_SHA: ${{ steps.merge.outputs.upstream_sha }}
         run: |
-          DATE=$(date -u +%Y-%m-%d)
-          BRANCH="sync/upstream-${DATE}-${{ github.run_number }}"
+          set -euo pipefail
 
-          ##### move the current (conflicted) work onto a new branch without
-          ##### touching the working tree, then stage the conflict markers as-is
-          git branch "${BRANCH}"
-          git symbolic-ref HEAD "refs/heads/${BRANCH}"
-          git add -A
-          git commit -m "chore: sync upstream contracts@${{ steps.merge.outputs.upstream_sha }} (conflicts - manual resolution required)"
-          git push origin "${BRANCH}"
+          ##### The conflicted merge is still sitting in the working tree (it was
+          ##### never committed), so the unmerged paths are readable here.
+          CONFLICTS=$(git diff --name-only --diff-filter=U)
+
+          git push origin "refs/remotes/upstream/main:refs/heads/${BRANCH}"
+
+          cat > pr-body.md <<BODY
+          Automated sync from \`lifinance/contracts@${UPSTREAM_SHA}\` hit merge conflicts.
+
+          This branch carries upstream's history as-is - the conflict markers were NOT
+          committed - so every commit on it is already signed. Resolve by merging
+          \`main\` into the branch and pushing a signed resolution:
+
+          \`\`\`bash
+          git fetch origin
+          git checkout ${BRANCH}
+          git merge origin/main   # resolve the conflicts listed below
+          git commit -S
+          git push
+          \`\`\`
+
+          Conflicting paths:
+
+          \`\`\`
+          ${CONFLICTS}
+          \`\`\`
+
+          > [!IMPORTANT]
+          > Merge this PR with a **merge commit**. Squash and rebase drop the upstream
+          > parent, so the merge base never advances and every later sync re-conflicts
+          > on the entire fork delta.
+
+          See the Notion 'Tron deployments' page (section: The contracts-tron Fork) and
+          EXSC-587 for the sync/versioning rules.
+          BODY
 
           gh pr create \
             --repo lifinance/contracts-tron \
             --title "chore: sync upstream contracts (${DATE}) - conflicts need resolution" \
-            --body "Automated sync from \`lifinance/contracts@${{ steps.merge.outputs.upstream_sha }}\` hit merge conflicts. Conflict markers are committed as-is on this branch - resolve them manually. See the Notion 'Tron deployments' page (section: The contracts-tron Fork) and EXSC-587 for the sync/versioning rules." \
+            --body-file pr-body.md \
             --base main \
             --head "${BRANCH}"
 
       ##### A sync that never lands is invisible: the job is a weekly cron nobody
       ##### watches, and the two hand-off paths exit successfully. Alert on any run
-      ##### that did not push to main, whatever the reason.
+      ##### that did not reach main, whatever the reason.
       - name: Notify Slack when the sync did not land on main
         if: >-
           always() && (failure()
-          || steps.merge.outputs.conflict == 'true'
+          || steps.merge.outputs.verdict == 'conflict'
           || steps.verify.outcome == 'failure')
         uses: slackapi/slack-github-action@485a9d42d3a73031f12ec201c457e2162c45d02d # v2.0.0
         with:
@@ -209,5 +315,5 @@ jobs:
           webhook-type: incoming-webhook
           payload: |
             {
-              "text": ":warning: contracts-tron upstream sync did not reach main (${{ steps.merge.outputs.conflict == 'true' && 'merge conflicts - PR opened' || steps.verify.outcome == 'failure' && 'tests failed - PR opened' || 'job failed' }}): <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|run #${{ github.run_number }}>. The fork stays behind lifinance/contracts until this is resolved."
+              "text": ":warning: contracts-tron upstream sync did not reach main (${{ steps.merge.outputs.verdict == 'conflict' && 'merge conflicts - PR opened' || steps.verify.outcome == 'failure' && 'tests failed - PR opened' || 'job failed' }}): <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|run #${{ github.run_number }}>. The fork stays behind lifinance/contracts until this is resolved."
             }
