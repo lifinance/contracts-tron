@@ -92,6 +92,9 @@ jobs:
           if git merge upstream/main --no-commit --no-ff; then
             echo -e "\033[32mClean merge, no conflicts\033[0m"
             echo "verdict=clean" >> "$GITHUB_OUTPUT"
+            ##### Record the tree the suite is about to run against, so the merge
+            ##### GitHub builds later can be checked against it.
+            echo "merged_tree=$(git write-tree)" >> "$GITHUB_OUTPUT"
           else
             echo -e "\033[31mMerge conflicts detected, will hand off to a PR\033[0m"
             echo "verdict=conflict" >> "$GITHUB_OUTPUT"
@@ -182,6 +185,7 @@ jobs:
           BRANCH: ${{ steps.merge.outputs.branch }}
           BASE_SHA: ${{ steps.merge.outputs.base_sha }}
           UPSTREAM_SHA: ${{ steps.merge.outputs.upstream_sha }}
+          MERGED_TREE: ${{ steps.merge.outputs.merged_tree }}
         run: |
           set -euo pipefail
 
@@ -201,10 +205,20 @@ jobs:
 
           ##### GitHub builds the merge commit, so it carries GitHub's signature and
           ##### satisfies the required_signatures rule on main (EXSC-1019).
-          gh api -X POST "repos/${GITHUB_REPOSITORY}/merges" \
+          MERGE_SHA=$(gh api -X POST "repos/${GITHUB_REPOSITORY}/merges" \
             -f base=main \
             -f head="${BRANCH}" \
-            -f commit_message="chore: sync upstream contracts@${UPSTREAM_SHA}"
+            -f commit_message="chore: sync upstream contracts@${UPSTREAM_SHA}" \
+            -q .sha)
+
+          ##### GitHub resolves the merge on its own side, so the tree it produced is
+          ##### not automatically the tree forge ran against. Fail loudly if they
+          ##### differ rather than call an untested tree a successful sync.
+          git fetch origin main
+          if [ "$(git rev-parse "${MERGE_SHA}^{tree}")" != "${MERGED_TREE}" ]; then
+            echo -e "\033[31m${MERGE_SHA} is not the tree the suite tested (${MERGED_TREE}); main needs review\033[0m" >&2
+            exit 1
+          fi
 
           gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${BRANCH}"
 
