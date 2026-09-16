@@ -216,8 +216,15 @@ jobs:
 
           ##### main must still be where it was when the suite ran, or the commit
           ##### GitHub builds below is not the tree forge tested.
+          ##### FETCH_HEAD, not origin/main: whether a fetch updates the
+          ##### remote-tracking ref depends on the refspec actions/checkout happened to
+          ##### leave in remote.origin.fetch, which varies with how ref/fetch-depth
+          ##### resolve. Where it does not, CURRENT_SHA still holds the value from
+          ##### checkout time, the comparison below is true by construction, and the
+          ##### guard passes without ever having looked at main. FETCH_HEAD is written
+          ##### by the fetch itself, so it cannot go stale that way.
           git fetch origin main
-          CURRENT_SHA=$(git rev-parse origin/main)
+          CURRENT_SHA=$(git rev-parse FETCH_HEAD)
           if [ "${CURRENT_SHA}" != "${BASE_SHA}" ]; then
             echo -e "\033[31mmain moved from ${BASE_SHA} to ${CURRENT_SHA} while the suite ran; refusing to merge an untested result\033[0m" >&2
             exit 1
