@@ -404,9 +404,11 @@ jobs:
           This branch carries upstream's history as-is, with no bot-authored commit, so
           every commit on it is already signed.
 
-          **The branch alone is green.** It is \`upstream/main\` verbatim and carries none
-          of the fork delta, so the failure only exists in the *merge* of this branch with
-          \`main\`. Reproduce it that way before fixing anything:
+          **The failure lives in the merge, not in this branch's own history.** The branch
+          is \`upstream/main\` verbatim and carries none of the fork delta - the breakage
+          only appears once it is combined with \`main\`, which is exactly what the checks
+          below are running (\`pull_request\` checks build the merge ref, not the branch
+          tip). Reproduce it the same way before fixing anything:
 
           \`\`\`bash
           git fetch origin
@@ -449,8 +451,8 @@ jobs:
       ##### inferred world-state from a step outcome. A step that fails at its `git
       ##### push` and one that fails at `gh pr create` share an outcome but leave the
       ##### repo in opposite states, so the branches below read the facts those steps
-      ##### recorded - whether a branch was pushed, whether a PR exists, whether a
-      ##### commit actually landed on main - instead of guessing from success/failure.
+      ##### recorded - whether a branch was pushed, whether a PR exists - instead of
+      ##### guessing from success/failure.
       - name: Compose the alert text
         id: alert
         ##### cancelled() is listed separately because failure() is false for a
