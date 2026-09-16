@@ -47,6 +47,10 @@ permissions: {} # no default access; each job declares what it needs
 jobs:
   sync-upstream:
     runs-on: ubuntu-latest
+    # The suite runs ~30 min unsharded; the rest of the job is API calls. This is
+    # headroom for a slow run, not a target. Without it a wedged suite would sit on
+    # the 360-minute default and surface as a cancellation five hours late.
+    timeout-minutes: 90
     permissions:
       contents: write # required to push the sync branch and merge it into main
       pull-requests: write # required to open a PR on merge conflicts
@@ -449,11 +453,17 @@ jobs:
       ##### commit actually landed on main - instead of guessing from success/failure.
       - name: Compose the alert text
         id: alert
+        ##### cancelled() is listed separately because failure() is false for a
+        ##### cancelled job: without it the timeout below - the way a wedged suite
+        ##### ends - would compose no text and send no Slack message at all.
         if: >-
           always() && (failure()
+          || cancelled()
           || steps.merge.outputs.verdict == 'conflict'
           || steps.verify.outcome == 'failure')
         env:
+          # job.status, not cancelled(): the latter is only callable in an `if`.
+          JOB_STATUS: ${{ job.status }}
           ADVANCE: ${{ steps.advance.outcome }}
           HANDOFF: ${{ steps.handoff.outcome }}
           PUSHED: ${{ steps.handoff.outputs.pushed }}
@@ -468,7 +478,13 @@ jobs:
           ##### No "an untested commit is on main" case to distinguish: main is only
           ##### ever advanced by a fast-forward that runs after the tree check, so
           ##### every way this step can fail leaves main where it was.
-          if [ "${ADVANCE}" = failure ]; then
+          #####
+          ##### Cancellation is checked first and named as such: the timeout is the
+          ##### expected way a wedged suite ends, and calling that "the job failed"
+          ##### would send on-call looking for a test failure that never happened.
+          if [ "${JOB_STATUS}" = cancelled ]; then
+            TEXT="the run was cancelled or hit the job timeout before the sync landed; ${BEHIND}"
+          elif [ "${ADVANCE}" = failure ]; then
             TEXT="the merge did not land on main; ${BEHIND}"
           elif [ "${HANDOFF}" != skipped ]; then
             if [ "${VERDICT}" = conflict ]; then REASON="merge conflicts"; else REASON="tests failed against the merge result"; fi
@@ -492,6 +508,11 @@ jobs:
         if: always() && steps.alert.outcome != 'skipped'
         uses: slackapi/slack-github-action@485a9d42d3a73031f12ec201c457e2162c45d02d # v2.0.0
         with:
+          # The action defaults to errors: false, which leaves the step green when
+          # delivery fails. This alert is the only signal that a weekly cron nobody
+          # watches did not land, so a message that was never delivered has to redden
+          # the run rather than read as a successful notification.
+          errors: true
           webhook: ${{ secrets.SLACK_WEBHOOK_DEV_SC_GITHUB_CI_NOTIFICATIONS }}
           webhook-type: incoming-webhook
           payload: |
