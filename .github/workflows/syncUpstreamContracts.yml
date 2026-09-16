@@ -7,10 +7,13 @@
 #   account, so there is no key to register for it and no way to make a local
 #   `git commit -S` produce a GitHub-verified signature.
 # - Clean merge: runs the full forge test suite against the merge result first;
-#   only if tests pass does it advance main through the REST "merge a branch"
-#   endpoint. Requires the app to be added as a bypass actor on the "main
-#   protection" ruleset (manual one-time setup, see EXSC-587/EXSC-599) - otherwise
-#   this merge is rejected and the job fails.
+#   only if tests pass is the merge built, off to the side, on a scratch ref pinned
+#   at the SHA the suite ran against. main is then fast-forwarded onto it with
+#   force=false, which GitHub accepts only while main is still at that SHA - so the
+#   tree check and the publish cannot interleave with someone else's push. Requires
+#   the app to be added as a bypass actor on the "main protection" ruleset (manual
+#   one-time setup, see EXSC-587/EXSC-599) - otherwise the update is rejected and
+#   the job fails.
 # - Clean merge but failing tests: does NOT touch main; hands upstream's commits to
 #   sync/upstream-YYYY-MM-DD-<run>-<attempt> and opens a PR so the breakage is reviewed with
 #   all required checks applied (EXSC-603)
@@ -21,9 +24,10 @@
 #   re-conflicts on the whole fork delta.
 # - Known limitation: the pre-merge test run is the same suite as forge-unit-tests.yml
 #   but unsharded (single runner) - slower, which is acceptable for a weekly job
-# - Known cost, accepted: the clean path now pushes a short-lived branch, and
+# - Known cost, accepted: the clean path now pushes two short-lived branches (the
+#   upstream commits, and the scratch ref the merge is built on), and
 #   networkRpcsChecker.yml declares a bare `push:` with no branches filter, so each
-#   green sync triggers one extra RPC-check run for a branch deleted seconds later.
+#   green sync triggers two extra RPC-check runs for branches deleted seconds later.
 #   That filter belongs in networkRpcsChecker.yml, which is upstream-owned and
 #   byte-identical to lifinance/contracts - changing it here would manufacture a
 #   fork delta on a file that has none. Fix it upstream, not in this repo.
@@ -99,6 +103,7 @@ jobs:
             echo "base_sha=${BASE_SHA}"
             echo "date=${DATE}"
             echo "branch=sync/upstream-${DATE}-${RUN_NUMBER}-${RUN_ATTEMPT}"
+            echo "base_branch=sync/base-${DATE}-${RUN_NUMBER}-${RUN_ATTEMPT}"
           } >> "$GITHUB_OUTPUT"
 
           if git merge-base --is-ancestor upstream/main HEAD; then
@@ -208,21 +213,22 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           BRANCH: ${{ steps.merge.outputs.branch }}
+          BASE_BRANCH: ${{ steps.merge.outputs.base_branch }}
           BASE_SHA: ${{ steps.merge.outputs.base_sha }}
           UPSTREAM_SHA: ${{ steps.merge.outputs.upstream_sha }}
           MERGED_TREE: ${{ steps.merge.outputs.merged_tree }}
         run: |
           set -euo pipefail
 
-          ##### main must still be where it was when the suite ran, or the commit
-          ##### GitHub builds below is not the tree forge tested.
-          ##### FETCH_HEAD, not origin/main: whether a fetch updates the
-          ##### remote-tracking ref depends on the refspec actions/checkout happened to
-          ##### leave in remote.origin.fetch, which varies with how ref/fetch-depth
-          ##### resolve. Where it does not, CURRENT_SHA still holds the value from
-          ##### checkout time, the comparison below is true by construction, and the
-          ##### guard passes without ever having looked at main. FETCH_HEAD is written
-          ##### by the fetch itself, so it cannot go stale that way.
+          ##### Cheap early exit. Keeping an untested tree off main is the
+          ##### compare-and-swap's job now, not this check's; this only avoids spending
+          ##### two branches and a merge on a result that could never land.
+          #####
+          ##### FETCH_HEAD, not origin/main: a fetch updates the remote-tracking ref
+          ##### only if the refspec actions/checkout left in remote.origin.fetch covers
+          ##### it, which varies with how ref/fetch-depth resolve. Where it does not,
+          ##### CURRENT_SHA would still hold the checkout-time value and this would
+          ##### compare BASE_SHA against itself.
           git fetch origin main
           CURRENT_SHA=$(git rev-parse FETCH_HEAD)
           if [ "${CURRENT_SHA}" != "${BASE_SHA}" ]; then
@@ -238,10 +244,19 @@ jobs:
           ##### Nothing here is bot-authored, so the hook has nothing to vet.
           git push --no-verify origin "refs/remotes/upstream/main:refs/heads/${BRANCH}"
 
+          ##### The merge is built on a scratch ref pinned at BASE_SHA, not on main.
+          ##### /merges takes no expected-base parameter, so merging straight into main
+          ##### would move main before anything had checked what GitHub built - and a
+          ##### bad result would already be published. Off to the side, main stays put
+          ##### until the tree has been verified.
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f ref="refs/heads/${BASE_BRANCH}" \
+            -f sha="${BASE_SHA}" > /dev/null
+
           ##### GitHub builds the merge commit, so it carries GitHub's signature and
           ##### satisfies the required_signatures rule on main (EXSC-1019).
           MERGE_JSON=$(gh api -X POST "repos/${GITHUB_REPOSITORY}/merges" \
-            -f base=main \
+            -f base="${BASE_BRANCH}" \
             -f head="${BRANCH}" \
             -f commit_message="chore: sync upstream contracts@${UPSTREAM_SHA}")
 
@@ -249,54 +264,65 @@ jobs:
           ##### which gh reports as success. Without this the empty response falls
           ##### through to the tree check and reports a mismatch that never happened.
           if [ -z "${MERGE_JSON}" ]; then
-            echo -e "\033[31m/merges returned no commit (204: main already contains ${BRANCH}); nothing was merged\033[0m" >&2
+            echo -e "\033[31m/merges returned no commit (204: ${BASE_BRANCH} already contains ${BRANCH}); nothing was merged\033[0m" >&2
             exit 1
           fi
 
-          ##### A commit now exists on main. Recorded before the tree check so the
-          ##### Slack alert can say whether main actually moved instead of guessing
-          ##### from this step's outcome.
-          echo "merged=true" >> "$GITHUB_OUTPUT"
-
-          ##### Tree and parent come from the POST response itself rather than a
-          ##### re-fetch plus rev-parse: it is the same commit either way, and reading
-          ##### what GitHub reports it built needs no round trip and cannot fail on an
-          ##### object that is not local yet.
+          ##### Tree comes from the POST response itself rather than a re-fetch plus
+          ##### rev-parse: it is the same commit either way, and reading what GitHub
+          ##### reports it built needs no round trip and cannot fail on an object that
+          ##### is not local yet. The first parent needs no check - it is BASE_SHA by
+          ##### construction, because that is what the scratch ref was created at.
           MERGE_SHA=$(jq -r '.sha' <<<"${MERGE_JSON}")
           MERGE_TREE=$(jq -r '.commit.tree.sha' <<<"${MERGE_JSON}")
-          MERGE_PARENT=$(jq -r '.parents[0].sha' <<<"${MERGE_JSON}")
 
           ##### GitHub resolves the merge on its own side, so the tree it produced is
-          ##### not automatically the tree forge ran against. Fail loudly if they
-          ##### differ rather than call an untested tree a successful sync.
-          #####
-          ##### Note this check is necessarily post-hoc: /merges takes no expected-base
-          ##### parameter, so the base-SHA guard above and the POST cannot be made
-          ##### atomic. If main moves in that window, main ends up carrying a merge
-          ##### commit the suite never ran against and a human has to decide whether to
-          ##### revert it - hence the two messages below distinguishing the cases.
+          ##### not automatically the tree forge ran against. main has not moved at this
+          ##### point, so a mismatch is simply a sync that did not happen.
           if [ "${MERGE_TREE}" != "${MERGED_TREE}" ]; then
-            if [ "${MERGE_PARENT}" != "${BASE_SHA}" ]; then
-              echo -e "\033[31mmain moved to ${MERGE_PARENT} between the base check and the merge; ${MERGE_SHA} is now ON MAIN but was never tested - revert or re-run\033[0m" >&2
+            echo -e "\033[31m${MERGE_SHA} carries a different tree (${MERGE_TREE}) than the suite tested (${MERGED_TREE}); GitHub resolved the merge differently - main was left untouched\033[0m" >&2
+            exit 1
+          fi
+
+          ##### Compare-and-swap. force=false makes this a fast-forward-only update:
+          ##### MERGE_SHA descends from BASE_SHA through its first parent, so GitHub
+          ##### accepts it only while main is still at BASE_SHA and rejects it with a
+          ##### 422 if main moved to anything else meanwhile. That is what makes the
+          ##### base check and the publish atomic, and it is still a GitHub-built
+          ##### commit, so nothing about EXSC-1019 changes.
+          if ! gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/heads/main" \
+            -f sha="${MERGE_SHA}" \
+            -F force=false > /dev/null; then
+            ##### Read main back rather than asserting it moved: the rejection says the
+            ##### swap did not apply, not where main ended up, and on-call needs the
+            ##### latter. Assigned first - a failing substitution inside echo exits 0.
+            if git fetch origin main > /dev/null 2>&1; then
+              OBSERVED=$(git rev-parse FETCH_HEAD)
             else
-              echo -e "\033[31m${MERGE_SHA} is ON MAIN but carries a different tree than the suite tested (${MERGED_TREE}); GitHub resolved the merge differently - needs review\033[0m" >&2
+              OBSERVED="unreadable"
             fi
+            echo -e "\033[31mfast-forwarding main to ${MERGE_SHA} was rejected; main was at ${BASE_SHA} when the suite ran and reads ${OBSERVED} now - the verified merge commit exists but was not published\033[0m" >&2
             exit 1
           fi
 
       ##### Runs whether or not the merge succeeded: a branch left behind by a failed
-      ##### POST or a failed tree check is never reused (the name carries the run
-      ##### number), so it would linger forever. Tolerant of an already-deleted ref -
-      ##### a failed cleanup must not turn a sync that did land into a red job.
-      - name: Delete the sync branch
+      ##### POST, a failed tree check or a rejected fast-forward is never reused (the
+      ##### name carries the run number), so it would linger forever. Tolerant of an
+      ##### already-deleted ref - and of one that was never created, since the scratch
+      ##### base ref only exists if the step got past its early exit - because a failed
+      ##### cleanup must not turn a sync that did land into a red job.
+      - name: Delete the sync branches
         if: always() && steps.advance.outcome != 'skipped'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           BRANCH: ${{ steps.merge.outputs.branch }}
+          BASE_BRANCH: ${{ steps.merge.outputs.base_branch }}
         run: |
           set -euo pipefail
-          gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${BRANCH}" \
-            || echo "sync branch ${BRANCH} was already gone or could not be deleted; continuing"
+          for ref in "${BRANCH}" "${BASE_BRANCH}"; do
+            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${ref}" \
+              || echo "sync branch ${ref} was already gone or could not be deleted; continuing"
+          done
 
       ##### Both hand-off paths - red tests against a clean merge, and a conflicted
       ##### merge - do the same thing: leave main alone, publish upstream's commits to
@@ -429,7 +455,6 @@ jobs:
           || steps.verify.outcome == 'failure')
         env:
           ADVANCE: ${{ steps.advance.outcome }}
-          MERGED: ${{ steps.advance.outputs.merged }}
           HANDOFF: ${{ steps.handoff.outcome }}
           PUSHED: ${{ steps.handoff.outputs.pushed }}
           PR_OPENED: ${{ steps.handoff.outputs.pr }}
@@ -440,12 +465,11 @@ jobs:
 
           BEHIND="the fork stays behind lifinance/contracts"
 
-          if [ "${ADVANCE}" = failure ] && [ "${MERGED}" = true ]; then
-            ##### The branch is already gone here - the delete step runs on
-            ##### always() - so the only thing on-call can act on is the commit.
-            TEXT="a merge commit is ON MAIN that the suite never ran against; read the run log and revert it"
-          elif [ "${ADVANCE}" = failure ]; then
-            TEXT="the merge never landed; main is untouched and ${BEHIND}"
+          ##### No "an untested commit is on main" case to distinguish: main is only
+          ##### ever advanced by a fast-forward that runs after the tree check, so
+          ##### every way this step can fail leaves main where it was.
+          if [ "${ADVANCE}" = failure ]; then
+            TEXT="the merge did not land on main; ${BEHIND}"
           elif [ "${HANDOFF}" != skipped ]; then
             if [ "${VERDICT}" = conflict ]; then REASON="merge conflicts"; else REASON="tests failed against the merge result"; fi
             if [ "${PR_OPENED}" = true ]; then
