@@ -92,6 +92,11 @@ jobs:
           # name needs the attempt too or "Re-run failed jobs" collides with the
           # branch the first attempt already pushed.
           RUN_ATTEMPT: ${{ github.run_attempt }}
+          # `git merge` resolves the committer ident at startup and refuses to run
+          # without one, even with --no-commit. Nothing is committed with it: the
+          # merge below only reaches the index and the tree.
+          GIT_COMMITTER_NAME: lifi-contracts-tron-sync[bot]
+          GIT_COMMITTER_EMAIL: lifi-contracts-tron-sync[bot]@users.noreply.github.com
         run: |
           set -euo pipefail
 
