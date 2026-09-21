@@ -63,6 +63,7 @@ import {
   evaluateDelegateCallGate,
 } from './delegatecall-gate'
 import { getDeployedFacetVersionFromLog } from './facet-version-utils'
+import { assertStoreCredentialsAreEncrypted } from './mongo-store-transport'
 import { printableField } from './printable-field'
 import {
   firstSupplied,
@@ -75,6 +76,7 @@ import {
   getLocalSelectorInfo,
   resolveSelectorsViaFourByte,
 } from './selector-registry'
+import { getSignTimeTransportConfig } from './sign-time-transport'
 import {
   TIMELOCK_OPERATION_STATE_ABI,
   TIMELOCK_ZERO_PREDECESSOR,
@@ -546,13 +548,19 @@ export class SafeClient {
     let chain: Chain | undefined = undefined
 
     if (typeof provider === 'string') {
+      // Reads only, and an operator waits on every one of them — this client is
+      // built before the signer is shown a network list. The endpoint's own
+      // retry profile is a broadcast budget: TronGrid's 8 retries on a 2s
+      // exponential backoff is ~10 minutes for one read, and `tronshasta`'s
+      // primary is a TronGrid host. The wallet transport below keeps that
+      // profile, because a broadcast is what it was written for.
       const { url, fetchOptions, retryCount, retryDelay } =
-        getTransportConfigFromRpcUrl(provider)
+        getSignTimeTransportConfig(provider)
       publicClient = createPublicClient({
         transport: http(url, {
           ...(fetchOptions ? { fetchOptions } : {}),
-          ...(retryCount !== undefined ? { retryCount } : {}),
-          ...(retryDelay !== undefined ? { retryDelay } : {}),
+          retryCount,
+          retryDelay,
         }),
       })
     } else {
@@ -1738,7 +1746,7 @@ const NONCE_KEY_PATH = 'safeTx.data.nonce'
  * checksummed form, so one Safe has two spellings in this collection. Comparing
  * raw makes a nonce collision on Tron deterministic rather than merely possible.
  */
-const ADDRESS_COLLATION = { locale: 'en', strength: 2 } as const
+export const ADDRESS_COLLATION = { locale: 'en', strength: 2 } as const
 
 /** Which unique index rejected an insert, when one did. */
 export type DuplicateKeyKind =
@@ -2088,7 +2096,8 @@ async function ensureInFlightNonceIndex(
  * tunnel (`lifi-connect prod smart-contracts`); SC_MONGODB_URI must point at the
  * forwarded localhost port.
  * @returns MongoDB client and pendingTransactions collection
- * @throws Error if SC_MONGODB_URI is unset or the database cannot be reached
+ * @throws Error if SC_MONGODB_URI is unset, carries credentials over an
+ *   unencrypted connection, or the database cannot be reached
  */
 export async function getSafeMongoCollection(): Promise<{
   client: MongoClient
@@ -2096,6 +2105,7 @@ export async function getSafeMongoCollection(): Promise<{
 }> {
   if (!process.env.SC_MONGODB_URI)
     throw new Error('SC_MONGODB_URI environment variable is required')
+  assertStoreCredentialsAreEncrypted(process.env.SC_MONGODB_URI)
 
   // The Safe proposal database sits behind the lifi-connect tunnel; fail fast
   // with an actionable message when the tunnel isn't up instead of hanging on
@@ -2612,6 +2622,27 @@ export async function getNetworksWithPendingTransactions(
 }
 
 /**
+ * Picks the Safe the ownership scan reads, mirroring
+ * `prepareConfirmSafeTxNetwork`: the address `networks.json` names wins, and the
+ * proposal document's claim is only the fallback for a network that names none.
+ * The document's field is proposer-controlled, so letting it answer here would
+ * let one row naming a foreign Safe decide whether its whole network is offered
+ * at all — before the integrity assertions that exist to refuse that row ever
+ * run.
+ * @param network - Network the pending rows belong to
+ * @param documentSafeAddress - Safe address claimed by the network's first row
+ * @returns The Safe to read owners and threshold from, or undefined when
+ * neither source names one
+ */
+export function resolveOwnershipScanSafeAddress(
+  network: string,
+  documentSafeAddress?: string
+): Address | undefined {
+  const configured = networks[network.toLowerCase()]?.safeAddress
+  return (configured || documentSafeAddress || undefined) as Address | undefined
+}
+
+/**
  * Gets networks where the user can take action (is a Safe owner AND has actionable transactions).
  * Ownership is read from the chain with a read-only client, so no signer material is needed here.
  * @param pendingTransactions - MongoDB collection
@@ -2648,18 +2679,21 @@ export async function getNetworksWithActionableTransactions(
         return { network, actionable: false, reason: 'no_pending_txs' }
       }
 
-      // Use the Safe address from the transaction document (not networks.json)
-      // This matches the behavior in processTxs
-      const txSafeAddress = networkTxs[0]?.safeAddress as Address
-      if (!txSafeAddress) {
-        consola.debug(`No Safe address in transaction document for ${network}`)
+      const scanSafeAddress = resolveOwnershipScanSafeAddress(
+        network,
+        networkTxs[0]?.safeAddress
+      )
+      if (!scanSafeAddress) {
+        consola.debug(
+          `Neither networks.json nor the pending rows name a Safe for ${network}`
+        )
         return { network, actionable: false, reason: 'no_safe_address_in_tx' }
       }
 
       const publicClient = buildReadOnlyClient(network, rpcUrl)
       const normalizedSafeAddress = normalizeAddressForNetwork(
         network,
-        txSafeAddress
+        scanSafeAddress
       )
 
       let owners: Address[]
@@ -2687,7 +2721,7 @@ export async function getNetworksWithActionableTransactions(
       const isOwner = isAddressASafeOwner(owners, signerAddress)
       if (!isOwner) {
         consola.warn(
-          `[${network}] ⚠️  Signer ${signerAddress} is not an owner of Safe ${txSafeAddress}`
+          `[${network}] ⚠️  Signer ${signerAddress} is not an owner of Safe ${scanSafeAddress}`
         )
         consola.warn(`[${network}]    Safe owners: ${owners.join(', ')}`)
         return { network, actionable: false, reason: 'not_owner' }
@@ -2847,7 +2881,7 @@ export async function getNetworksWithActionableTransactions(
  * @param address - Contract address
  * @returns Contract name if found, otherwise "Unknown"
  */
-function getContractNameFromNetworkDeployments(
+export function getContractNameFromNetworkDeployments(
   network: string,
   address: string
 ): string {
@@ -2879,7 +2913,7 @@ function getContractNameFromNetworkDeployments(
  *   facet, or exactly one artifact is the smallest strict superset of the facet's selectors. Otherwise
  *   "Unknown" (including multiple exact matches or a tie for smallest superset).
  */
-function getContractNameFromSelectorsInOut(
+export function getContractNameFromSelectorsInOut(
   selectors: (string | Uint8Array)[]
 ): string {
   const projectRoot = process.cwd()
@@ -2952,7 +2986,7 @@ function getContractNameFromSelectorsInOut(
  * Normalizes a diamondCut selector entry (hex string or byte array) to a
  * lowercase 0x-prefixed string for map lookups.
  */
-function normalizeDiamondCutSelector(selector: unknown): string {
+export function normalizeDiamondCutSelector(selector: unknown): string {
   if (typeof selector === 'string')
     return (
       selector.startsWith('0x') ? selector : `0x${selector}`
@@ -2971,7 +3005,7 @@ let cachedDiamondSelectorMap:
  * Creates a mapping of function selectors to function names from diamond ABI
  * @returns Map of selector to function info
  */
-async function createSelectorMap(): Promise<Map<
+export async function createSelectorMap(): Promise<Map<
   string,
   { name: string; signature: string }
 > | null> {
