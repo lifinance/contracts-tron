@@ -10,7 +10,7 @@ import { InvalidReceiver, NullAddrIsNotAValidSpender, InvalidAmount, NullAddrIsN
 
 /// @title LibAsset
 /// @author LI.FI (https://li.fi)
-/// @custom:version 2.1.3
+/// @custom:version 2.1.3-tron
 /// @notice This library contains helpers for dealing with onchain transfers
 ///         of assets, including accounting for the native asset `assetId`
 ///         conventions and any noncompliant ERC20 transfers
@@ -24,6 +24,15 @@ library LibAsset {
 
     /// @dev EIP-7702 delegation designator prefix for Account Abstraction
     bytes3 internal constant DELEGATION_DESIGNATOR = 0xef0100;
+
+    uint256 internal constant TRON_CHAIN_ID = 728126428;
+
+    /// @dev Tron's canonical USDT was compiled with Solidity ~0.4.x: its transfer() is declared
+    ///      `returns (bool)` but never executes `return true`, so the ABI decoder sees 32 zero
+    ///      bytes and SafeTransferLib reverts. We bypass the return-value check for this one
+    ///      address on Tron mainnet only.
+    address internal constant TRON_USDT =
+        0xa614f803B6FD780986A42c78Ec9c7f77e6DeD13C;
 
     /// @notice Gets the balance of the inheriting contract for the given asset
     /// @param assetId The asset identifier to get the balance of
@@ -81,6 +90,17 @@ library LibAsset {
         // make sure a meaningful receiver address was provided
         if (recipient == NULL_ADDRESS) {
             revert InvalidReceiver();
+        }
+
+        // Tron's canonical USDT (compiled ~0.4.x) declares transfer() returns (bool) but never
+        // executes `return true`, so SafeTransferLib sees 32 zero bytes and reverts.
+        // We bypass the return-value check for this one address on Tron mainnet only.
+        if (
+            block.chainid == TRON_CHAIN_ID &&
+            assetId == TRON_USDT
+        ) {
+            IERC20(assetId).transfer(recipient, amount);
+            return;
         }
 
         // transfer ERC20 assets (will revert if target reverts or contract has insufficient balance)
