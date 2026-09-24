@@ -17,6 +17,9 @@
 # - Clean merge but failing tests: does NOT touch main; hands upstream's commits to
 #   sync/upstream-YYYY-MM-DD-<run>-<attempt> and opens a PR so the breakage is reviewed with
 #   all required checks applied (EXSC-603)
+# - Clean merge that changes a Tron overlay (a src/**/*.sol file with a "-tron"
+#   version), or fails the overlay check: same hand-off PR, never a push to main
+#   (EXSC-858). The Tron Overlay Check workflow re-runs the check on that PR.
 # - Conflicting merge: opens the same PR and lists the conflicting paths in the
 #   body for whoever resolves it. Conflict markers are never committed.
 # - Sync PRs must be merged WITH A MERGE COMMIT. Squash and rebase drop the
@@ -163,6 +166,26 @@ jobs:
         if: steps.merge.outputs.verdict == 'clean'
         run: bun install --frozen-lockfile
 
+      ##### EXSC-858: an overlay change is never published without review, even
+      ##### when it merged cleanly and passes the suite - the suite cannot tell a
+      ##### lost Tron bypass from a correct one. upstream/main is exactly the
+      ##### commit just merged (fetched once, above), so it is the right upstream
+      ##### reference here. continue-on-error so a failure routes to the hand-off.
+      - name: Check Tron overlays against merge result
+        id: overlays
+        if: steps.merge.outputs.verdict == 'clean'
+        continue-on-error: true
+        env:
+          BASE_SHA: ${{ steps.merge.outputs.base_sha }}
+          MERGED_TREE: ${{ steps.merge.outputs.merged_tree }}
+        run: |
+          set -euo pipefail
+          bunx tsx script/tasks/checkTronOverlays.ts \
+            --before "${BASE_SHA}" \
+            --after "${MERGED_TREE}" \
+            --upstream upstream/main \
+            --github-output "$GITHUB_OUTPUT"
+
       - name: Install Foundry
         if: steps.merge.outputs.verdict == 'clean'
         uses: ./.github/actions/setup-foundry
@@ -216,9 +239,49 @@ jobs:
           done
           exit 1
 
+      ##### One place decides whether a clean merge may be published. Every reason
+      ##### it may not is collected, so the PR and the alert name all of them.
+      - name: Decide whether the clean merge can be published
+        id: route
+        if: steps.merge.outputs.verdict == 'clean'
+        env:
+          VERIFY: ${{ steps.verify.outcome }}
+          OVERLAYS: ${{ steps.overlays.outcome }}
+          TOUCHED: ${{ steps.overlays.outputs.touched }}
+          TOUCHED_PATHS: ${{ steps.overlays.outputs.touched_paths }}
+        run: |
+          set -euo pipefail
+          REASONS=()
+          TESTS_FAILED=false
+          OVERLAY_REVIEW=false
+          if [ "${VERIFY}" != success ]; then
+            REASONS+=("tests failed against the merge result")
+            TESTS_FAILED=true
+          fi
+          if [ "${OVERLAYS}" != success ]; then
+            REASONS+=("the Tron overlay check failed")
+            OVERLAY_REVIEW=true
+          elif [ "${TOUCHED}" = true ]; then
+            REASONS+=("the merge changes Tron overlay ${TOUCHED_PATHS}")
+            OVERLAY_REVIEW=true
+          fi
+
+          if [ "${#REASONS[@]}" -eq 0 ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          REASON=$(printf '%s; ' "${REASONS[@]}")
+          {
+            echo "publish=false"
+            echo "reason=${REASON%; }"
+            echo "tests_failed=${TESTS_FAILED}"
+            echo "overlay_review=${OVERLAY_REVIEW}"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Advance main to the merge result
         id: advance
-        if: steps.merge.outputs.verdict == 'clean' && steps.verify.outcome == 'success'
+        if: steps.route.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           BRANCH: ${{ steps.merge.outputs.branch }}
@@ -333,21 +396,24 @@ jobs:
               || echo "sync branch ${ref} was already gone or could not be deleted; continuing"
           done
 
-      ##### Both hand-off paths - red tests against a clean merge, and a conflicted
-      ##### merge - do the same thing: leave main alone, publish upstream's commits to
-      ##### the sync branch, and open a PR where all required checks and review apply.
-      ##### Only the title and the middle of the body differ.
+      ##### Every hand-off path - a clean merge that may not be published, and a
+      ##### conflicted merge - does the same thing: leave main alone, publish
+      ##### upstream's commits to the sync branch, and open a PR where all required
+      ##### checks and review apply. Only the title and the middle of the body differ.
       - name: Hand off to a PR
         id: handoff
         if: >-
           steps.merge.outputs.verdict == 'conflict'
-          || (steps.merge.outputs.verdict == 'clean' && steps.verify.outcome == 'failure')
+          || steps.route.outputs.publish == 'false'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           BRANCH: ${{ steps.merge.outputs.branch }}
           DATE: ${{ steps.merge.outputs.date }}
           UPSTREAM_SHA: ${{ steps.merge.outputs.upstream_sha }}
           VERDICT: ${{ steps.merge.outputs.verdict }}
+          REASON: ${{ steps.route.outputs.reason }}
+          TESTS_FAILED: ${{ steps.route.outputs.tests_failed }}
+          OVERLAY_REVIEW: ${{ steps.route.outputs.overlay_review }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -400,14 +466,36 @@ jobs:
           \`\`\`
           BODY
           else
-            TITLE="chore: sync upstream contracts (${DATE}) - tests failing, review required"
+            if [ "${TESTS_FAILED}" = true ]; then
+              TITLE="chore: sync upstream contracts (${DATE}) - tests failing, review required"
+            else
+              TITLE="chore: sync upstream contracts (${DATE}) - Tron overlay changed, review required"
+            fi
             cat > pr-body.md <<BODY
-          Automated sync from \`lifinance/contracts@${UPSTREAM_SHA}\` merged cleanly but the
-          forge test suite FAILED against the merge result, so it was not merged into
-          \`main\`. Test log: ${RUN_URL}
+          Automated sync from \`lifinance/contracts@${UPSTREAM_SHA}\` merged cleanly but was
+          not merged into \`main\`: ${REASON}. Run log: ${RUN_URL}
 
           This branch carries upstream's history as-is, with no bot-authored commit, so
           every commit on it is already signed.
+          BODY
+          fi
+
+          if [ "${OVERLAY_REVIEW}" = true ]; then
+            cat >> pr-body.md <<BODY
+
+          **Tron overlay.** This sync reaches a file the fork keeps different from upstream
+          (a \`-tron\` \`@custom:version\`). The Tron Overlay Check on this PR fails if the
+          merge deletes the overlay, drops the \`-tron\` suffix, leaves its code equal to
+          upstream's, or leaves its version behind upstream's. Resolve it on this branch:
+          re-apply the Tron change onto upstream's new code and version it
+          \`<upstream-version>-tron\`. If retiring or reshaping the overlay is deliberate,
+          add the \`tron-overlay-change-accepted\` label; the check then reports what it
+          overrides instead of failing. See \`docs/TronFork.md\`.
+          BODY
+          fi
+
+          if [ "${TESTS_FAILED}" = true ]; then
+            cat >> pr-body.md <<BODY
 
           **The failure lives in the merge, not in this branch's own history.** The branch
           is \`upstream/main\` verbatim and carries none of the fork delta - the breakage
@@ -467,7 +555,7 @@ jobs:
           always() && (failure()
           || cancelled()
           || steps.merge.outputs.verdict == 'conflict'
-          || steps.verify.outcome == 'failure')
+          || steps.route.outputs.publish == 'false')
         env:
           # job.status, not cancelled(): the latter is only callable in an `if`.
           JOB_STATUS: ${{ job.status }}
@@ -476,6 +564,7 @@ jobs:
           PUSHED: ${{ steps.handoff.outputs.pushed }}
           PR_OPENED: ${{ steps.handoff.outputs.pr }}
           VERDICT: ${{ steps.merge.outputs.verdict }}
+          ROUTE_REASON: ${{ steps.route.outputs.reason }}
           BRANCH: ${{ steps.merge.outputs.branch }}
         run: |
           set -euo pipefail
@@ -494,7 +583,7 @@ jobs:
           elif [ "${ADVANCE}" = failure ]; then
             TEXT="the merge did not land on main; ${BEHIND}"
           elif [ "${HANDOFF}" != skipped ]; then
-            if [ "${VERDICT}" = conflict ]; then REASON="merge conflicts"; else REASON="tests failed against the merge result"; fi
+            if [ "${VERDICT}" = conflict ]; then REASON="merge conflicts"; else REASON="${ROUTE_REASON}"; fi
             if [ "${PR_OPENED}" = true ]; then
               TEXT="${REASON}, PR opened; ${BEHIND} until it is merged"
             elif [ "${PUSHED}" = true ]; then
