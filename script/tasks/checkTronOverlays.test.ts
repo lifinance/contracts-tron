@@ -142,6 +142,22 @@ describe('checkTronOverlays CLI', () => {
     expect(status).toBe(0)
   })
 
+  it('refuses an override flag value it cannot read', () => {
+    const after = commit({ [OVERLAY]: null }, 'delete')
+    const { status, output } = run(
+      '--before',
+      before,
+      '--after',
+      after,
+      '--upstream',
+      upstream,
+      '--accept-overlay-change=maybe'
+    )
+
+    expect(output).toContain("got 'maybe'")
+    expect(status).not.toBe(0)
+  })
+
   it('writes touched paths and the result to --github-output', () => {
     const after = commit(
       { [OVERLAY]: source('2.1.3-tron', 'tron2();') },

@@ -25,6 +25,8 @@ import { appendFileSync } from 'fs'
 import { defineCommand, runMain } from 'citty'
 import { consola } from 'consola'
 
+import { readBooleanFlag } from '../deploy/safe/cli-flags'
+
 import {
   checkOverlays,
   isTronOverlay,
@@ -145,7 +147,6 @@ const main = defineCommand({
     'accept-overlay-change': {
       type: 'boolean',
       description: 'Report failed checks as overridden and exit 0',
-      default: false,
     },
     'github-output': {
       type: 'string',
@@ -154,6 +155,10 @@ const main = defineCommand({
     },
   },
   run({ args }) {
+    const accepted = readBooleanFlag(process.argv, {
+      camel: 'acceptOverlayChange',
+      kebab: 'accept-overlay-change',
+    })
     const before = resolveTree(args.before)
     const after = resolveTree(args.after)
     const upstream = resolveTree(args.upstream)
@@ -183,7 +188,6 @@ const main = defineCommand({
       return
     }
 
-    const accepted = args['accept-overlay-change']
     for (const { code, path, message } of findings) {
       const line = `[${code}] ${path} ${message}`
       if (accepted) consola.warn(`OVERRIDDEN ${line}`)
