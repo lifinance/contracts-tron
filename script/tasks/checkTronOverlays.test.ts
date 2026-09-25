@@ -1,11 +1,13 @@
 import { spawnSync } from 'child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
 
 // eslint-disable-next-line import/no-unresolved
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+
+import { withholdCredentials } from '../deploy/safe/spawn-env'
 
 const CLI = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -14,10 +16,23 @@ const CLI = join(
 const OVERLAY = 'src/Libraries/LibAsset.sol'
 const PLAIN = 'src/Facets/SomeFacet.sol'
 
-const source = (version: string, body: string): string =>
-  `/// @custom:version ${version}\nlibrary L {\n${body}\n}\n`
+const source = (version: string, lines: string[]): string =>
+  [`/// @custom:version ${version}`, 'library L {', ...lines, '}', ''].join(
+    '\n'
+  )
+
+const UPSTREAM_V1 = source('2.1.3', ['upstream();'])
+const UPSTREAM_V2 = source('2.2.0', ['upstream();', 'upstreamFix();'])
+const OVERLAY_V1 = source('2.1.3-tron', ['tronBypass();', 'upstream();'])
+const OVERLAY_V2 = source('2.2.0-tron', [
+  'tronBypass();',
+  'upstream();',
+  'upstreamFix();',
+])
 
 let repo: string
+let forkBase: string
+let upstreamTip: string
 
 function git(...args: string[]): string {
   const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' })
@@ -26,7 +41,7 @@ function git(...args: string[]): string {
   return result.stdout.trim()
 }
 
-function commit(files: Record<string, string | null>, message: string): string {
+function stage(files: Record<string, string | null>): void {
   for (const [path, content] of Object.entries(files)) {
     if (content === null) {
       git('rm', '-q', path)
@@ -36,39 +51,56 @@ function commit(files: Record<string, string | null>, message: string): string {
     writeFileSync(join(repo, path), content)
     git('add', path)
   }
+}
+
+function commit(files: Record<string, string | null>, message: string): string {
+  stage(files)
   git('commit', '-q', '-m', message)
   return git('rev-parse', 'HEAD')
 }
 
+/** A sync merge of the upstream tip into the fork, resolved to `files`. */
+function syncMerge(
+  files: Record<string, string | null>,
+  base: string = forkBase
+): string {
+  git('checkout', '-q', base)
+  stage(files)
+  const tree = git('write-tree')
+  return git('commit-tree', tree, '-p', base, '-p', upstreamTip, '-m', 'sync')
+}
+
 function run(...args: string[]): { status: number | null; output: string } {
   // consola drops info-level logs when NODE_ENV=test, which bun test sets
-  const { NODE_ENV: _nodeEnv, TEST: _test, ...env } = process.env
-  const result = spawnSync(process.execPath, [CLI, ...args], {
-    cwd: repo,
-    encoding: 'utf8',
-    env,
-  })
+  const {
+    NODE_ENV: _nodeEnv,
+    TEST: _test,
+    ...env
+  } = process.env as Record<string, string>
+  withholdCredentials(env)
+  const result = spawnSync(
+    process.execPath,
+    [CLI, '--upstream', 'upstream', ...args],
+    { cwd: repo, encoding: 'utf8', env }
+  )
   return { status: result.status, output: result.stdout + result.stderr }
 }
 
-let upstream: string
-let before: string
-
 beforeEach(() => {
   repo = mkdtempSync(join(tmpdir(), 'tron-overlays-'))
-  git('init', '-q', '-b', 'main')
+  git('init', '-q', '-b', 'upstream')
   git('config', 'user.email', 'test@example.com')
   git('config', 'user.name', 'test')
   git('config', 'commit.gpgsign', 'false')
 
-  upstream = commit(
-    {
-      [OVERLAY]: source('2.1.3', 'upstream();'),
-      [PLAIN]: source('1.0.0', 'facet();'),
-    },
-    'upstream'
+  const upstreamBase = commit(
+    { [OVERLAY]: UPSTREAM_V1, [PLAIN]: source('1.0.0', ['facet();']) },
+    'upstream v1'
   )
-  before = commit({ [OVERLAY]: source('2.1.3-tron', 'tron();') }, 'overlay')
+  upstreamTip = commit({ [OVERLAY]: UPSTREAM_V2 }, 'upstream v2')
+
+  git('checkout', '-q', '-b', 'main', upstreamBase)
+  forkBase = commit({ [OVERLAY]: OVERLAY_V1 }, 'overlay')
 })
 
 afterEach(() => {
@@ -76,65 +108,33 @@ afterEach(() => {
 })
 
 describe('checkTronOverlays CLI', () => {
-  it('passes when the sync left the overlay intact', () => {
-    const after = commit({ [PLAIN]: source('1.0.1', 'facet2();') }, 'sync')
-    const { status, output } = run(
-      '--before',
-      before,
-      '--after',
-      after,
-      '--upstream',
-      upstream
-    )
+  it('passes a sync that rebased the overlay correctly', () => {
+    const after = syncMerge({ [OVERLAY]: OVERLAY_V2 })
+    const { status, output } = run('--before', forkBase, '--after', after)
 
-    expect(output).toContain('No overlay changed by this sync')
+    expect(output).toContain(`Reached by this sync: ${OVERLAY}`)
+    expect(output).toContain('Every Tron overlay survived the sync.')
     expect(status).toBe(0)
   })
 
-  it('checks an uncommitted merge passed as a tree SHA', () => {
-    writeFileSync(join(repo, OVERLAY), source('2.1.3', 'upstream();'))
-    git('add', OVERLAY)
-    const tree = git('write-tree')
-
-    const { status, output } = run(
-      '--before',
-      before,
-      '--after',
-      tree,
-      '--upstream',
-      upstream
-    )
+  it('fails a sync that took upstream wholesale and names the label', () => {
+    const after = syncMerge({ [OVERLAY]: UPSTREAM_V2 })
+    const { status, output } = run('--before', forkBase, '--after', after)
 
     expect(output).toContain('OVERLAY_SUFFIX_LOST')
     expect(output).toContain('OVERLAY_DELTA_LOST')
-    expect(status).toBe(1)
-  })
-
-  it('fails a deleted overlay and names the override label', () => {
-    const after = commit({ [OVERLAY]: null }, 'delete')
-    const { status, output } = run(
-      '--before',
-      before,
-      '--after',
-      after,
-      '--upstream',
-      upstream
-    )
-
-    expect(output).toContain('OVERLAY_DELETED')
+    expect(output).toContain('tronBypass();')
     expect(output).toContain('tron-overlay-change-accepted')
     expect(status).toBe(1)
   })
 
   it('reports failures as overridden with --accept-overlay-change', () => {
-    const after = commit({ [OVERLAY]: null }, 'delete')
+    const after = syncMerge({ [OVERLAY]: null })
     const { status, output } = run(
       '--before',
-      before,
+      forkBase,
       '--after',
       after,
-      '--upstream',
-      upstream,
       '--accept-overlay-change'
     )
 
@@ -143,14 +143,12 @@ describe('checkTronOverlays CLI', () => {
   })
 
   it('refuses an override flag value it cannot read', () => {
-    const after = commit({ [OVERLAY]: null }, 'delete')
+    const after = syncMerge({ [OVERLAY]: null })
     const { status, output } = run(
       '--before',
-      before,
+      forkBase,
       '--after',
       after,
-      '--upstream',
-      upstream,
       '--accept-overlay-change=maybe'
     )
 
@@ -158,54 +156,34 @@ describe('checkTronOverlays CLI', () => {
     expect(status).not.toBe(0)
   })
 
-  it('writes touched paths and the result to --github-output', () => {
-    const after = commit(
-      { [OVERLAY]: source('2.1.3-tron', 'tron2();') },
-      'edit'
-    )
-    const outputFile = join(repo, 'github-output')
-    const { status } = run(
-      '--before',
-      before,
-      '--after',
-      after,
-      '--upstream',
-      upstream,
-      '--github-output',
-      outputFile
-    )
+  it('does not check a change that merges no upstream commits', () => {
+    git('checkout', '-q', forkBase)
+    const after = commit({ [OVERLAY]: null }, 'ordinary fork change')
+    const { status, output } = run('--before', forkBase, '--after', after)
 
+    expect(output).toContain('merges no new upstream commits')
     expect(status).toBe(0)
-    expect(readFileSync(outputFile, 'utf8')).toBe(
-      `touched=true\ntouched_paths=${OVERLAY}\n`
-    )
+  })
+
+  it('passes with a note when the fork carries no overlay', () => {
+    git('checkout', '-q', forkBase)
+    const noOverlay = commit({ [OVERLAY]: UPSTREAM_V1 }, 'retire overlay')
+    const after = syncMerge({ [OVERLAY]: UPSTREAM_V2 }, noOverlay)
+    const { status, output } = run('--before', noOverlay, '--after', after)
+
+    expect(output).toContain('No Tron overlay')
+    expect(status).toBe(0)
   })
 
   it('fails hard on a ref that does not resolve', () => {
     const { status, output } = run(
       '--before',
-      before,
+      forkBase,
       '--after',
-      'no-such-ref',
-      '--upstream',
-      upstream
+      'no-such-ref'
     )
 
     expect(output).toContain('no-such-ref')
-    expect(status).not.toBe(0)
-  })
-
-  it('fails when --before carries no overlay', () => {
-    const { status, output } = run(
-      '--before',
-      upstream,
-      '--after',
-      before,
-      '--upstream',
-      upstream
-    )
-
-    expect(output).toContain('No Tron overlay found')
     expect(status).not.toBe(0)
   })
 })

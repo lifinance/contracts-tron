@@ -4,11 +4,12 @@
  * An overlay is a Solidity file the fork deliberately keeps different from
  * upstream, marked by a `-tron` version (`2.1.3-tron`, `2.1.3-tron-r2`). An
  * upstream sync must not silently undo one: this module decides, for each
- * overlay the fork carried before the sync, whether it survived the merge.
+ * overlay the sync reached, whether it survived the merge.
  * `checkTronOverlays.ts` resolves the file contents from git; this module does
  * no I/O.
  */
 
+import { isAuditNonRelevantLine } from '../deploy/audit/audit-relevant-source'
 import { readContractVersion } from '../deploy/shared/contract-version'
 
 export type OverlayViolationCode =
@@ -18,13 +19,15 @@ export type OverlayViolationCode =
   | 'OVERLAY_BASE_STALE'
   | 'OVERLAY_UPSTREAM_MISSING'
 
-/** One overlay file at the three points the check compares. */
+/** One overlay file at the four points the check compares. */
 export interface IOverlayFileState {
   path: string
   /** Source on the fork before the sync. */
   beforeSource: string
   /** Source after the sync; null when the merge removed the file. */
   afterSource: string | null
+  /** Source at the upstream commit the fork was synced to before; null when absent. */
+  previousUpstreamSource: string | null
   /** Source at the upstream commit the sync merged; null when absent there. */
   upstreamSource: string | null
 }
@@ -36,6 +39,7 @@ export interface IOverlayFinding {
 }
 
 const TRON_SUFFIX_RE = /^-tron(?:-r\d+)?$/
+const MAX_LISTED_LINES = 5
 
 /**
  * Whether a version marks a Tron overlay.
@@ -60,35 +64,57 @@ export function isTronOverlay(source: string): boolean {
 }
 
 /**
- * Drops comments, pragma and blank lines, the same filter
- * `versionControlAndAuditCheck.yml` applies, so "the code differs" means the
- * same thing here as it does to the audit gate. This also drops the
- * `@custom:version` line.
+ * The lines the audit gate treats as code (`isAuditNonRelevantLine`), trimmed,
+ * minus block-comment continuation lines, which the gate keeps. The
+ * `@custom:version` line is a comment, so it is dropped too.
  */
-function significantLines(source: string): string {
+function significantLines(source: string): string[] {
   return source
     .split('\n')
     .map((line) => line.trim())
-    .filter(
-      (line) =>
-        line.length > 0 &&
-        !line.startsWith('//') &&
-        !line.startsWith('/*') &&
-        !line.startsWith('*') &&
-        !line.startsWith('pragma')
-    )
-    .join('\n')
+    .filter((line) => !isAuditNonRelevantLine(line) && !line.startsWith('*'))
+}
+
+function countLines(lines: string[]): Map<string, number> {
+  const counts = new Map<string, number>()
+  for (const line of lines) counts.set(line, (counts.get(line) ?? 0) + 1)
+  return counts
 }
 
 /**
- * Whether two sources differ in code, ignoring comments, pragma and whitespace.
+ * The code lines the fork added on top of its upstream base that the merged
+ * file no longer carries on top of the new upstream.
  *
- * @param a - One source.
- * @param b - The other source.
- * @returns True when the executable content differs.
+ * Counted per line, not as a set: the fork's bypass adds generic lines such as
+ * `return;` and `}` that upstream has elsewhere, so a line "survived" only if
+ * the merged file has as many more copies than the new upstream as the fork
+ * had more than the old one.
+ *
+ * @param base - Upstream source the overlay was built on; '' when absent.
+ * @param overlay - The fork's source before the sync.
+ * @param upstream - Upstream source the sync merged.
+ * @param merged - The fork's source after the sync.
+ * @returns Each missing line once per missing copy, in `overlay` order.
  */
-export function hasCodeDifference(a: string, b: string): boolean {
-  return significantLines(a) !== significantLines(b)
+export function missingForkLines(
+  base: string,
+  overlay: string,
+  upstream: string,
+  merged: string
+): string[] {
+  const inBase = countLines(significantLines(base))
+  const inOverlay = countLines(significantLines(overlay))
+  const inUpstream = countLines(significantLines(upstream))
+  const inMerged = countLines(significantLines(merged))
+  const missing: string[] = []
+
+  for (const [line, overlayCount] of inOverlay) {
+    const added = overlayCount - (inBase.get(line) ?? 0)
+    const carried = (inMerged.get(line) ?? 0) - (inUpstream.get(line) ?? 0)
+    for (let i = Math.max(carried, 0); i < added; i++) missing.push(line)
+  }
+
+  return missing
 }
 
 function describeVersion(source: string): string {
@@ -98,8 +124,15 @@ function describeVersion(source: string): string {
   return 'no @custom:version tag'
 }
 
+function listLines(lines: string[]): string {
+  const shown = lines.slice(0, MAX_LISTED_LINES).map((line) => `\n    ${line}`)
+  const more = lines.length - MAX_LISTED_LINES
+  return shown.join('') + (more > 0 ? `\n    ...and ${more} more` : '')
+}
+
 function checkOverlay(file: IOverlayFileState): IOverlayFinding[] {
-  const { path, beforeSource, afterSource, upstreamSource } = file
+  const { path, beforeSource, afterSource, previousUpstreamSource } = file
+  const { upstreamSource } = file
   const before = describeVersion(beforeSource)
 
   if (afterSource === null)
@@ -133,11 +166,19 @@ function checkOverlay(file: IOverlayFileState): IOverlayFinding[] {
       )}. Keep the "-tron" suffix when resolving the version line.`,
     })
 
-  if (!hasCodeDifference(upstreamSource, afterSource))
+  const missing = missingForkLines(
+    previousUpstreamSource ?? '',
+    beforeSource,
+    upstreamSource,
+    afterSource
+  )
+  if (missing.length > 0)
     findings.push({
       path,
       code: 'OVERLAY_DELTA_LOST',
-      message: `now has the same code as upstream, so the Tron change is gone. Restore it from the fork's previous version.`,
+      message: `lost ${missing.length} line(s) of the Tron change:${listLines(
+        missing
+      )}\n  Restore them. If upstream's new code means they must change, rewrite them and add the tron-overlay-change-accepted label.`,
     })
 
   const upstreamVersion = upstream.kind === 'ok' ? upstream.version : null
@@ -154,24 +195,29 @@ function checkOverlay(file: IOverlayFileState): IOverlayFinding[] {
 }
 
 /**
- * Checks every overlay the fork carried before a sync.
+ * Whether the sync reached an overlay: the fork's copy changed, or upstream's
+ * did. The second case matters on its own — a resolution that keeps the
+ * fork's file untouched while upstream moved on leaves the overlay stale.
  *
- * @param files - One entry per overlay; callers select them with `isTronOverlay`
- *   on the pre-sync source.
- * @returns One finding per failed check, in input order; empty when all pass.
+ * @param file - One overlay's state.
+ * @returns True when the overlay needs checking for this sync.
  */
-export function checkOverlays(files: IOverlayFileState[]): IOverlayFinding[] {
-  return files.flatMap(checkOverlay)
+export function isReachedBySync(file: IOverlayFileState): boolean {
+  return (
+    file.beforeSource !== file.afterSource ||
+    file.previousUpstreamSource !== file.upstreamSource
+  )
 }
 
 /**
- * The overlays whose content the sync changed.
+ * Checks the overlays a sync reached. Overlays the sync did not reach are
+ * skipped, so a state accepted on an earlier sync is not re-flagged until
+ * upstream changes that file again.
  *
- * @param files - Overlay states, as passed to `checkOverlays`.
- * @returns Paths whose post-sync source differs from the pre-sync source.
+ * @param files - One entry per overlay the fork carried before the sync;
+ *   callers select them with `isTronOverlay` on the pre-sync source.
+ * @returns One finding per failed check, in input order; empty when all pass.
  */
-export function touchedOverlays(files: IOverlayFileState[]): string[] {
-  return files
-    .filter(({ beforeSource, afterSource }) => beforeSource !== afterSource)
-    .map(({ path }) => path)
+export function checkOverlays(files: IOverlayFileState[]): IOverlayFinding[] {
+  return files.filter(isReachedBySync).flatMap(checkOverlay)
 }
