@@ -493,6 +493,49 @@
     },
     {
       "key": {
+        "contractName": "CentrifugeFacet",
+        "sourceId": "src/Facets/CentrifugeFacet.sol",
+        "version": "1.0.0",
+        "closureHash": "0x0ef91654459e5d08c6d17794e917559466fce31b456cd0e73dbaa57e46d7ecbd",
+        "settingsHash": "0x48fde5cb6f411b0f8c9ca1c32f840873d478a053cb4a617a579eae3f3f641c71",
+        "settingsSource": "artifact",
+        "solcVersion": "0.8.29+commit.ab55807c"
+      },
+      "build": {
+        "repo": "contracts",
+        "profile": "default",
+        "hashedSettings": {
+          "evmVersion": "cancun",
+          "libraries": {},
+          "metadata": {
+            "bytecodeHash": "ipfs"
+          },
+          "optimizer": {
+            "enabled": true,
+            "runs": 1000000
+          }
+        }
+      },
+      "maskedHash": "0x89f07b90b40924a99f9902a930c44e9723b4bfe37f8aa9049cdb41cbabf96b5a",
+      "lineage": "CentrifugeFacet@1.0.0 (default: solc 0.8.29, cancun)",
+      "rawByteLength": 8440,
+      "immutableOffsets": [
+        {
+          "start": 93,
+          "length": 32
+        },
+        {
+          "start": 2237,
+          "length": 32
+        },
+        {
+          "start": 2316,
+          "length": 32
+        }
+      ]
+    },
+    {
+      "key": {
         "contractName": "ChainflipFacet",
         "sourceId": "src/Facets/ChainflipFacet.sol",
         "version": "1.0.1",
@@ -1616,8 +1659,8 @@
       "key": {
         "contractName": "NEARIntentsFacet",
         "sourceId": "src/Facets/NEARIntentsFacet.sol",
-        "version": "1.0.0",
-        "closureHash": "0x992cad156f34f875708c5b4382142e3942210b868a3f7dd96e61014c9a48a15e",
+        "version": "2.0.0",
+        "closureHash": "0x94439de5d221abea9f84d6405f0a2516a93804195b97b4999f50aebfaeda727b",
         "settingsHash": "0x48fde5cb6f411b0f8c9ca1c32f840873d478a053cb4a617a579eae3f3f641c71",
         "settingsSource": "artifact",
         "solcVersion": "0.8.29+commit.ab55807c"
@@ -1637,12 +1680,12 @@
           }
         }
       },
-      "maskedHash": "0x623b63ae6215648fa4d44e78a59913974df78d8cbcd1dcfe36c78f85995a86b3",
-      "lineage": "NEARIntentsFacet@1.0.0 (default: solc 0.8.29, cancun)",
-      "rawByteLength": 9285,
+      "maskedHash": "0x02f4b60b5df6c484d4b3b0048c70e602ce551b6d5309a3b6d40fc44bcd9dc29f",
+      "lineage": "NEARIntentsFacet@2.0.0 (default: solc 0.8.29, cancun)",
+      "rawByteLength": 9467,
       "immutableOffsets": [
         {
-          "start": 2777,
+          "start": 2908,
           "length": 32
         }
       ]

@@ -607,15 +607,66 @@ function getContractNamesFromNetworkDeploymentFile() {
   return 0
 }
 
+# getFoundryProfileValue: Reads KEY from the foundry.toml profile forge would build with.
+# The active profile is FOUNDRY_PROFILE (default when unset); a key the active profile
+# leaves out is read from [profile.default], which is how forge itself resolves it.
+#
+# Usage: getFoundryProfileValue KEY
+#   KEY - a scalar key such as solc_version or evm_version
+#
+# Returns: 0 with the unquoted value on stdout; 1 with the reason on stderr (stdout stays
+#          empty, callers capture it) when KEY is missing, the toml file does not exist, or
+#          neither profile declares KEY
+# Example: getFoundryProfileValue "solc_version"
+function getFoundryProfileValue() {
+  local KEY="$1"
+  local TOML_FILE="${FOUNDRY_TOML_FILE_PATH:-foundry.toml}"
+  local PROFILE
+  local VALUE
+
+  if [[ -z "$KEY" ]]; then
+    error "getFoundryProfileValue: KEY is required" >&2
+    return 1
+  fi
+  if [[ ! -f "$TOML_FILE" ]]; then
+    error "foundry.toml not found at $TOML_FILE" >&2
+    return 1
+  fi
+
+  for PROFILE in "${FOUNDRY_PROFILE:-default}" default; do
+    VALUE=$(awk -v section="[profile.$PROFILE]" -v key="$KEY" -v quotes="'\"" '
+      $1 == section { active = 1; next }
+      /^\[/ { active = 0 }
+      active && $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+        sub("^[^=]*=[[:space:]]*", "")
+        if ($0 ~ "^[" quotes "]") {
+          sub("^[" quotes "]", "")
+          sub("[" quotes "].*$", "")
+        } else {
+          sub("[[:space:]]*#.*$", "")
+          sub("[[:space:]]+$", "")
+        }
+        print
+        exit
+      }
+    ' "$TOML_FILE")
+    if [[ -n "$VALUE" ]]; then
+      echo "$VALUE"
+      return 0
+    fi
+  done
+
+  error "neither [profile.${FOUNDRY_PROFILE:-default}] nor [profile.default] in $TOML_FILE declares $KEY" >&2
+  return 1
+}
+
 function getSolcVersion() {
   local NETWORK="$1"
 
   if isZkEvmNetwork "$NETWORK"; then
-    # Extract from zksync profile
-    grep -A 10 "^\[profile\.zksync\]" foundry.toml | grep "solc_version" | cut -d "'" -f 2
+    FOUNDRY_PROFILE=zksync getFoundryProfileValue "solc_version"
   else
-    # Extract from default profile
-    grep -A 10 "^\[profile\.default\]" foundry.toml | grep "solc_version" | cut -d "'" -f 2
+    getFoundryProfileValue "solc_version"
   fi
 }
 
@@ -626,8 +677,7 @@ function getEvmVersion() {
     # For zkEVM networks, return appropriate identifier
     echo "zkevm"
   else
-    # Extract from default profile
-    grep -A 10 "^\[profile\.default\]" foundry.toml | grep "evm_version" | cut -d "'" -f 2
+    getFoundryProfileValue "evm_version"
   fi
 }
 
@@ -1077,7 +1127,7 @@ function saveDiamondFacets() {
     fi
 
     # throttle background jobs
-    while [[ $(jobs | wc -l | tr -d ' ') -ge $CONCURRENCY ]]; do
+    while [[ $(jobs -rp | wc -l | tr -d ' ') -ge $CONCURRENCY ]]; do
       sleep 0.1
     done
 
@@ -1242,7 +1292,7 @@ function saveDiamondPeriphery() {
   # resolve each periphery address in parallel and write to temp files
   for CONTRACT in ${PERIPHERY_CONTRACTS}; do
     # throttle background jobs; for Tron wait 2s between dispatches to respect RPC rate limits
-    while [[ $(jobs | wc -l | tr -d ' ') -ge $CONCURRENCY ]]; do
+    while [[ $(jobs -rp | wc -l | tr -d ' ') -ge $CONCURRENCY ]]; do
       if isTronNetwork "$NETWORK"; then sleep 2; else sleep 0.1; fi
     done
 
@@ -1746,6 +1796,47 @@ function getOptimizerRuns() {
 
 }
 
+# standardArtifactMatchesActiveProfile: Whether an artifact was built with the compiler the
+# active FOUNDRY_PROFILE declares. Anything unreadable - a missing file, absent metadata -
+# answers no, because the caller's response is to rebuild and that is also the right response
+# to an artifact nothing can vouch for.
+#
+# A profile that redirects `out` elsewhere answers no whatever the artifact records: it never
+# wrote this path, and [profile.zksync] pins the default profile's compiler pair, so the pair
+# alone would read its tree as this one's.
+#
+# Usage: standardArtifactMatchesActiveProfile ARTIFACT_PATH
+#   ARTIFACT_PATH - path of the standard forge artifact to inspect
+#
+# Returns: 0 when the artifact's recorded solc and evm versions are the active profile's, 1 otherwise
+# Example: standardArtifactMatchesActiveProfile "out/FeeForwarder.sol/FeeForwarder.json"
+function standardArtifactMatchesActiveProfile() {
+  local ARTIFACT_PATH="${1:-}"
+
+  if [[ -z "$ARTIFACT_PATH" ]] || [[ ! -f "$ARTIFACT_PATH" ]]; then
+    return 1
+  fi
+
+  local ACTIVE_OUT
+  ACTIVE_OUT=$(getFoundryProfileValue "out" 2>/dev/null) || return 1
+  [[ "$ACTIVE_OUT" == "out" ]] || return 1
+
+  local EXPECTED_SOLC EXPECTED_EVM ACTUAL_SOLC ACTUAL_EVM
+  EXPECTED_SOLC=$(getFoundryProfileValue "solc_version" 2>/dev/null) || return 1
+  EXPECTED_EVM=$(getFoundryProfileValue "evm_version" 2>/dev/null) || return 1
+  [[ -n "$EXPECTED_SOLC" && -n "$EXPECTED_EVM" ]] || return 1
+
+  ACTUAL_SOLC=$(jq -r '.metadata.compiler.version // empty' "$ARTIFACT_PATH" 2>/dev/null) || return 1
+  ACTUAL_EVM=$(jq -r '.metadata.settings.evmVersion // empty' "$ARTIFACT_PATH" 2>/dev/null) || return 1
+  [[ -n "$ACTUAL_SOLC" && -n "$ACTUAL_EVM" ]] || return 1
+
+  # solc records itself as `0.8.17+commit.8df45f5f`; foundry.toml pins the version alone.
+  [[ "${ACTUAL_SOLC%%+*}" == "$EXPECTED_SOLC" ]] || return 1
+  [[ "$ACTUAL_EVM" == "$EXPECTED_EVM" ]] || return 1
+
+  return 0
+}
+
 # ensureStandardArtifactForSalt: Make sure the standard build artifact a deploy salt is derived
 # from exists, building it if necessary.
 #
@@ -1760,10 +1851,16 @@ function getOptimizerRuns() {
 # the deploy looks like it stopped for no reason - leaving the salt to be derived from the error
 # text rather than from bytecode.
 #
+# An artifact already on disk is only accepted when its recorded compiler pair matches the
+# active profile's: a grouped deploy leaves the previous group's out/ behind, and a london
+# tree left there decides the zkEVM salt, and with it the deployed address, whenever no
+# cancun network ran in between to overwrite it.
+#
 # Usage: ensureStandardArtifactForSalt CONTRACT
 #   CONTRACT - Name of the contract whose artifact is required
 #
-# Returns: 0 if the artifact exists or was built; 1 (with an error) if it cannot be produced.
+# Returns: 0 if the artifact exists for the active profile or was built; 1 (with an error) if
+#          it cannot be produced.
 # Example: ensureStandardArtifactForSalt "FeeForwarder"
 function ensureStandardArtifactForSalt() {
   # read function arguments into variables
@@ -1776,7 +1873,7 @@ function ensureStandardArtifactForSalt() {
 
   local ARTIFACT_PATH="out/$CONTRACT.sol/$CONTRACT.json"
 
-  if checkIfFileExists "$ARTIFACT_PATH" >/dev/null; then
+  if standardArtifactMatchesActiveProfile "$ARTIFACT_PATH"; then
     return 0
   fi
 
@@ -1784,14 +1881,19 @@ function ensureStandardArtifactForSalt() {
     return 1
   fi
 
-  echo "[info] standard artifact $ARTIFACT_PATH not found - running 'forge build --skip test' to derive the deploy salt"
-  if ! forge build --skip test; then
-    error "'forge build --skip test' failed - cannot derive the deploy salt for $CONTRACT without $ARTIFACT_PATH"
+  echo "[info] standard artifact $ARTIFACT_PATH missing or built under another profile - running forge build --skip 'test/**' to derive the deploy salt"
+  if ! forge build --skip 'test/**'; then
+    error "forge build --skip 'test/**' failed - cannot derive the deploy salt for $CONTRACT without $ARTIFACT_PATH"
     return 1
   fi
 
   if ! checkIfFileExists "$ARTIFACT_PATH" >/dev/null; then
-    error "'forge build --skip test' did not produce $ARTIFACT_PATH - cannot derive the deploy salt for $CONTRACT (is $CONTRACT.sol still present in src/?)"
+    error "forge build --skip 'test/**' did not produce $ARTIFACT_PATH - cannot derive the deploy salt for $CONTRACT (is $CONTRACT.sol still present in src/?)"
+    return 1
+  fi
+
+  if ! standardArtifactMatchesActiveProfile "$ARTIFACT_PATH"; then
+    error "$ARTIFACT_PATH was rebuilt but still does not record the compiler pair FOUNDRY_PROFILE=${FOUNDRY_PROFILE:-default} declares - refusing to derive the deploy salt for $CONTRACT from it"
     return 1
   fi
 
@@ -1880,28 +1982,55 @@ function redactRpcUrl() {
   printf '%s' "${1:-}" | sed -E 's#[a-zA-Z][a-zA-Z0-9+.-]*://[^[:space:]]+#[redacted-url]#g'
 }
 
+# verifyContract: Verifies a deployed contract on the network's block explorer,
+# then submits it to Sourcify (see verifyContractOnSourcify). The Sourcify step
+# is best-effort and runs whatever the explorer result, because the ERC-7730
+# clear-signing sync needs it independently of the explorer.
+#
+# Usage: verifyContract NETWORK CONTRACT ADDRESS ARGS [SOLC_VERSION] [EVM_VERSION] [OPTIMIZER_RUNS]
+#   The optional toolchain overrides pin forge to the toolchain the contract
+#   was BUILT with (non-zkEVM only), so re-verifying an older contract does not
+#   recompile against whichever profile happens to be active now.
+#
+# Returns: the explorer verification result (0 verified, 1 not verified or
+#   network excluded via DO_NOT_VERIFY_IN_THESE_NETWORKS)
 function verifyContract() {
+  local NETWORK=$1
+  local CONTRACT=$2
+
+  if isNetworkExcludedFromVerification "$NETWORK"; then
+    echoDebug "network $NETWORK is excluded for contract verification, therefore verification of contract $CONTRACT will be skipped"
+    return 1
+  fi
+
+  local EXPLORER_STATUS=0
+  verifyContractOnExplorer "$@" || EXPLORER_STATUS=$?
+  verifyContractOnSourcify "$@" || true
+  return "$EXPLORER_STATUS"
+}
+
+# isNetworkExcludedFromVerification: Checks whether contract verification is
+# disabled for a network via the comma-separated DO_NOT_VERIFY_IN_THESE_NETWORKS.
+#
+# Usage: isNetworkExcludedFromVerification NETWORK
+#   NETWORK - Network name from networks.json
+#
+# Returns: 0 if NETWORK is listed, 1 otherwise
+# Example: isNetworkExcludedFromVerification "arbitrum"
+function isNetworkExcludedFromVerification() {
+  local NETWORK="$1"
+  [[ -n "${DO_NOT_VERIFY_IN_THESE_NETWORKS:-}" && ",$DO_NOT_VERIFY_IN_THESE_NETWORKS," == *",$NETWORK,"* ]]
+}
+
+function verifyContractOnExplorer() {
   # read function arguments into variables
   local NETWORK=$1
   local CONTRACT=$2
   local ADDRESS=$3
   local ARGS=$4
-  # Optional toolchain overrides (positional $5-$7). When set (non-zkEVM only),
-  # they pin forge verify-contract to the toolchain a contract was BUILT with,
-  # so re-verifying an older contract does not recompile against the current
-  # foundry.toml (which may have moved to a different EVM-version group).
   local SOLC_VERSION_OVERRIDE="${5:-}"
   local EVM_VERSION_OVERRIDE="${6:-}"
   local OPTIMIZER_RUNS_OVERRIDE="${7:-}"
-
-  if [[ -n "$DO_NOT_VERIFY_IN_THESE_NETWORKS" ]]; then
-    case ",$DO_NOT_VERIFY_IN_THESE_NETWORKS," in
-    *,"$NETWORK",*)
-      echoDebug "network $NETWORK is excluded for contract verification, therefore verification of contract $CONTRACT will be skipped"
-      return 1
-      ;;
-    esac
-  fi
 
   # verify contract using forge
   MAX_RETRIES=$MAX_ATTEMPTS_PER_CONTRACT_VERIFICATION
@@ -1912,7 +2041,7 @@ function verifyContract() {
 
   # logging for debug purposes
   echo ""
-  echoDebug "in function verifyContract"
+  echoDebug "in function verifyContractOnExplorer"
   echoDebug "NETWORK=$NETWORK"
   echoDebug "CONTRACT=$CONTRACT"
   echoDebug "ADDRESS=$ADDRESS"
@@ -1948,9 +2077,11 @@ function verifyContract() {
       return 1
     fi
 
-    # Set environment variable for zkEVM
-    export FOUNDRY_PROFILE=zksync
+    # Scoped to this command: an exported profile would outlive the call and decide
+    # the compiler the next network's build and deployment record use.
     VERIFY_CMD=(
+      "env"
+      "FOUNDRY_PROFILE=zksync"
       "./foundry-zksync/forge"
       "verify-contract"
       "--zksync"
@@ -2196,6 +2327,148 @@ function verifyContract() {
 
   # If we get here, verification failed after all retries
   echo "[error] Failed to verify $CONTRACT on $NETWORK after $MAX_RETRIES attempts"
+  return 1
+}
+
+# getSourcifyLookupStatus: Queries Sourcify's lookup API (the endpoint the
+# registry lint reads) for one contract.
+#
+# Usage: getSourcifyLookupStatus CHAIN_ID ADDRESS
+#   CHAIN_ID - EIP-155 chain ID
+#   ADDRESS  - Contract address
+#
+# Returns: prints "200" (verified), "unsupported_chain", or the HTTP status
+#   (e.g. "404" not verified, "000" no response); always exits 0
+# Example: getSourcifyLookupStatus 42161 "0x1234..."
+function getSourcifyLookupStatus() {
+  local CHAIN_ID="$1"
+  local ADDRESS="$2"
+
+  local RESPONSE STATUS
+  RESPONSE=$(curl -s --max-time 10 -w '\n%{http_code}' \
+    "https://sourcify.dev/server/v2/contract/$CHAIN_ID/$ADDRESS" || true)
+  STATUS="${RESPONSE##*$'\n'}"
+  if [[ "$STATUS" == "400" && "$RESPONSE" == *'"unsupported_chain"'* ]]; then
+    echo "unsupported_chain"
+    return 0
+  fi
+  echo "$STATUS"
+}
+
+# verifyContractOnSourcify: Submits a deployed contract to sourcify.dev in
+# addition to the network's block explorer. The ERC-7730 clear-signing sync
+# publishes a chain's LiFiDiamond only when Sourcify verifies the diamond and
+# every facet (the registry lints with `erc7730 lint --require-verified`), so a
+# facet that is verified only on the explorer drops the whole chain from the
+# descriptor. Best-effort: a failure is a warning and never fails the caller.
+#
+# Usage: verifyContractOnSourcify NETWORK CONTRACT ADDRESS [ARGS] [SOLC_VERSION] [EVM_VERSION] [OPTIMIZER_RUNS]
+#   NETWORK        - Network name from networks.json
+#   CONTRACT       - Contract name (resolved to its source path)
+#   ADDRESS        - Deployed contract address
+#   ARGS           - Optional: ABI-encoded constructor args (0x-prefixed hex)
+#   SOLC_VERSION   - Optional: compiler version the contract was built with
+#   EVM_VERSION    - Optional: EVM version the contract was built with
+#   OPTIMIZER_RUNS - Optional: optimizer runs the contract was built with
+#
+# Routing/Behavior:
+#   - Networks in DO_NOT_VERIFY_IN_THESE_NETWORKS: skipped
+#   - Testnets and zkEVM networks: skipped (the registry excludes them; Sourcify
+#     cannot verify zksolc bytecode)
+#   - Networks whose foundry.toml verifier is sourcify.dev (telos): skipped, the
+#     explorer verification already submitted there. A network with its own
+#     Sourcify instance (tempo) is still submitted to sourcify.dev.
+#   - Already verified on Sourcify, or chain not supported by Sourcify: returns
+#     without submitting
+#
+# Returns: 0 if verified or skipped, 1 if Sourcify did not verify the contract
+# Example: verifyContractOnSourcify "arbitrum" "AcrossFacetV4" "0x1234..." "0x"
+function verifyContractOnSourcify() {
+  local NETWORK="$1"
+  local CONTRACT="$2"
+  local ADDRESS="$3"
+  local ARGS="${4:-}"
+  local SOLC_VERSION_OVERRIDE="${5:-}"
+  local EVM_VERSION_OVERRIDE="${6:-}"
+  local OPTIMIZER_RUNS_OVERRIDE="${7:-}"
+  local SOURCIFY_SERVER_URL="https://sourcify.dev/server"
+
+  if isNetworkExcludedFromVerification "$NETWORK" ||
+    isTestnetNetwork "$NETWORK" || isZkEvmNetwork "$NETWORK"; then
+    return 0
+  fi
+
+  local EXPLORER_VERIFIER_URL
+  EXPLORER_VERIFIER_URL=$(getVerifierUrlFromFoundryToml "$NETWORK" 2>/dev/null || true)
+  if [[ "$EXPLORER_VERIFIER_URL" == "$SOURCIFY_SERVER_URL"* ]]; then
+    return 0
+  fi
+
+  local CHAIN_ID STATUS
+  CHAIN_ID=$(getChainId "$NETWORK")
+  STATUS=$(getSourcifyLookupStatus "$CHAIN_ID" "$ADDRESS")
+  if [[ "$STATUS" == "200" ]]; then
+    echo "[info] $CONTRACT on $NETWORK with address $ADDRESS is already verified on Sourcify"
+    return 0
+  fi
+  if [[ "$STATUS" == "unsupported_chain" ]]; then
+    echo "[info] Sourcify does not support $NETWORK (chain $CHAIN_ID); skipping Sourcify verification of $CONTRACT"
+    return 0
+  fi
+
+  local CONTRACT_FILE_PATH API_KEY_NAME
+  CONTRACT_FILE_PATH=$(getContractFilePath "$CONTRACT")
+  API_KEY_NAME=$(getEtherscanApiKeyName "$NETWORK" 2>/dev/null || true)
+
+  # forge picks Etherscan whenever it resolves a non-empty Etherscan key, even
+  # with an explicit `--verifier sourcify` (forge 1.7.1,
+  # crates/verify/src/provider.rs). The key comes from the chain's foundry.toml
+  # [etherscan] entry (blanked: unsetting a var foundry.toml references fails
+  # config interpolation) or from the global ETHERSCAN_API_KEY /
+  # FOUNDRY_ETHERSCAN_API_KEY. FOUNDRY_PROFILE is spelled out so the printed
+  # retry command compiles with the profile the deploy wave exported (london).
+  local VERIFY_CMD=("env" "-u" "ETHERSCAN_API_KEY" "-u" "FOUNDRY_ETHERSCAN_API_KEY")
+  if [[ -n "${FOUNDRY_PROFILE:-}" ]]; then
+    VERIFY_CMD+=("FOUNDRY_PROFILE=$FOUNDRY_PROFILE")
+  fi
+  if [[ -n "$API_KEY_NAME" ]]; then
+    VERIFY_CMD+=("$API_KEY_NAME=")
+  fi
+  VERIFY_CMD+=(
+    "forge" "verify-contract"
+    "--verifier" "sourcify"
+    "--verifier-url" "$SOURCIFY_SERVER_URL"
+    "--watch"
+    "--chain-id" "$CHAIN_ID"
+    "$ADDRESS"
+    "$CONTRACT_FILE_PATH:$CONTRACT"
+  )
+  ARGS=$(echo "$ARGS" | head -1 | tr -d '\n')
+  if [[ "$ARGS" =~ ^0x([0-9a-fA-F]{2})+$ ]]; then
+    VERIFY_CMD+=("--constructor-args" "$ARGS")
+  fi
+  if [[ -n "$SOLC_VERSION_OVERRIDE" ]]; then
+    VERIFY_CMD+=("--compiler-version" "$SOLC_VERSION_OVERRIDE")
+  fi
+  if [[ -n "$EVM_VERSION_OVERRIDE" ]]; then
+    VERIFY_CMD+=("--evm-version" "$EVM_VERSION_OVERRIDE")
+  fi
+  if [[ -n "$OPTIMIZER_RUNS_OVERRIDE" ]]; then
+    VERIFY_CMD+=("--num-of-optimizations" "$OPTIMIZER_RUNS_OVERRIDE")
+  fi
+
+  # With --watch, forge polls the verification job and exits non-zero when the
+  # job fails or is still pending after its retries (8 x 15s, forge 1.7.1).
+  echo "[info] submitting $CONTRACT on $NETWORK ($ADDRESS) to Sourcify..."
+  local VERIFY_OUTPUT
+  if VERIFY_OUTPUT=$("${VERIFY_CMD[@]}" 2>&1); then
+    echoDebug "SOURCIFY VERIFY_OUTPUT: $VERIFY_OUTPUT"
+    echo "[info] $CONTRACT on $NETWORK with address $ADDRESS verified on Sourcify"
+    return 0
+  fi
+
+  warning "$CONTRACT on $NETWORK ($ADDRESS) is not verified on Sourcify, so the ERC-7730 clear-signing sync will leave $NETWORK out of the registry descriptor until it is. Retry with: ${VERIFY_CMD[*]}"
+  warning "Sourcify output: $VERIFY_OUTPUT"
   return 1
 }
 
@@ -2850,7 +3123,7 @@ function success() {
 #   MESSAGE - Text to log
 #
 # Returns: Writes "[YYYY-MM-DD HH:MM:SS] MESSAGE" to stdout.
-# Example: logWithTimestamp "Backed up foundry.toml"
+# Example: logWithTimestamp "Running forge build for London EVM group..."
 function logWithTimestamp() {
   local MESSAGE="$1"
   local TIMESTAMP
@@ -2873,6 +3146,31 @@ function logNetworkResult() {
   local TIMESTAMP
   TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S') || return 1
   printf '[%s] [%s] %s: %s\n' "$TIMESTAMP" "$NETWORK" "$STATUS" "$MESSAGE"
+}
+# prefixNetworkOutput: Tag each line of a background worker's output with its network.
+# Reads stdin until EOF, so it is used as the consumer of a pipeline.
+#
+# Prefer this over `| sed "s/^/[$NETWORK] /"`: sed block-buffers when its stdout is
+# not a tty, so a worker's whole output lands at once when it exits, and a wedged
+# run looks identical to a working one in a redirected log (EXSC-1038). The
+# builtins below write one line as soon as it is read.
+#
+# Usage: someNetworkWorker ARGS... | prefixNetworkOutput NETWORK
+#   NETWORK - Network name to prefix each line with
+#
+# Returns: 0. Writes "[NETWORK] LINE" to stdout, one write per input line.
+# Example: deployToNetworkWorker "$NETWORK" ... 2>&1 | prefixNetworkOutput "$NETWORK"
+function prefixNetworkOutput() {
+  local NETWORK="$1"
+  local LINE
+  while IFS= read -r LINE; do
+    printf '[%s] %s\n' "$NETWORK" "$LINE"
+  done
+  # a worker killed mid-line leaves text with no trailing newline: read reports
+  # failure for it but still assigns it, so emit it instead of dropping it
+  if [[ -n "${LINE:-}" ]]; then
+    printf '[%s] %s\n' "$NETWORK" "$LINE"
+  fi
 }
 # <<<<< output to console
 

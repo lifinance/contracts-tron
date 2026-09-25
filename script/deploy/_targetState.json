@@ -49,7 +49,8 @@
         "ReceiverStargateV2": "latest",
         "SymbiosisFacet": "latest",
         "ThorSwapFacet": "latest",
-        "FraxFacet": "latest"
+        "FraxFacet": "latest",
+        "CentrifugeFacet": "latest"
       }
     }
   },
@@ -266,7 +267,8 @@
         "SymbiosisFacet": "latest",
         "SupersetFacet": "latest",
         "ThorSwapFacet": "latest",
-        "FraxFacet": "latest"
+        "FraxFacet": "latest",
+        "CentrifugeFacet": "latest"
       }
     }
   },
@@ -2278,6 +2280,7 @@
         "EmergencyPauseFacet": "latest",
         "GasZipFacet": "latest",
         "GenericSwapFacetV3": "latest",
+        "LayerSwapFacet": "latest",
         "LiFiIntentEscrowFacetV2": "latest",
         "LiFiTimelockController": "latest",
         "OwnershipFacet": "latest",
@@ -2295,7 +2298,10 @@
         "ReceiverOIF": "latest",
         "AcrossFacetV4": "latest",
         "ReceiverAcrossV4": "latest",
-        "RelayDepositoryFacet": "latest"
+        "RelayDepositoryFacet": "latest",
+        "EcoFacet": "latest",
+        "GardenFacet": "latest",
+        "SymbiosisFacet": "latest"
       }
     }
   },
