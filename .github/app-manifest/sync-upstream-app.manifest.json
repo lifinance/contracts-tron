@@ -1,0 +1,12 @@
+{
+  "name": "lifi-contracts-tron-sync",
+  "url": "https://github.com/lifinance/contracts-tron",
+  "redirect_url": "https://github.com/lifinance/contracts-tron",
+  "public": false,
+  "default_permissions": {
+    "contents": "write",
+    "pull_requests": "write",
+    "metadata": "read"
+  },
+  "default_events": []
+}
