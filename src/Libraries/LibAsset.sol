@@ -95,7 +95,10 @@ library LibAsset {
         // Tron's canonical USDT (compiled ~0.4.x) declares transfer() returns (bool) but never
         // executes `return true`, so SafeTransferLib sees 32 zero bytes and reverts.
         // We bypass the return-value check for this one address on Tron mainnet only.
-        if (block.chainid == TRON_CHAIN_ID && assetId == TRON_USDT) {
+        if (
+            block.chainid == TRON_CHAIN_ID &&
+            assetId == TRON_USDT
+        ) {
             IERC20(assetId).transfer(recipient, amount);
             return;
         }
