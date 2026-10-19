@@ -372,6 +372,28 @@
       ]
     }
   ],
+  "immutablezkevm": [
+    {
+      "address": "0x351802bA143D4DE0bf3123267cAdd6D082fefB29",
+      "functionSelectors": [
+        {
+          "selector": "0x00a32e6c",
+          "signature": "runVM((uint8,bytes32)[],(bytes[]))"
+        }
+      ]
+    }
+  ],
+  "ink": [
+    {
+      "address": "0x8D2bD2776338afeb68830F3253aF17CD82141Bb0",
+      "functionSelectors": [
+        {
+          "selector": "0x00a32e6c",
+          "signature": "runVM((uint8,bytes32)[],(bytes[]))"
+        }
+      ]
+    }
+  ],
   "katana": [
     {
       "address": "0x40d037C6AaD6Df87D757195ef841B246B52F5103",
@@ -554,6 +576,17 @@
     },
     {
       "address": "0x0B2b381654Ad888DA00fc12a1a5A610E6E9D4724",
+      "functionSelectors": [
+        {
+          "selector": "0x00a32e6c",
+          "signature": "runVM((uint8,bytes32)[],(bytes[]))"
+        }
+      ]
+    }
+  ],
+  "mode": [
+    {
+      "address": "0x351802bA143D4DE0bf3123267cAdd6D082fefB29",
       "functionSelectors": [
         {
           "selector": "0x00a32e6c",
@@ -956,6 +989,17 @@
         }
       ]
     },
+    {
+      "address": "0x351802bA143D4DE0bf3123267cAdd6D082fefB29",
+      "functionSelectors": [
+        {
+          "selector": "0x00a32e6c",
+          "signature": "runVM((uint8,bytes32)[],(bytes[]))"
+        }
+      ]
+    }
+  ],
+  "xlayer": [
     {
       "address": "0x351802bA143D4DE0bf3123267cAdd6D082fefB29",
       "functionSelectors": [
