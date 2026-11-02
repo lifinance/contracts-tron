@@ -62,7 +62,7 @@ Every deployable contract carries `@custom:version X.Y.Z` (semver). Bump rules:
 - Multiple tron-only iterations while main stays on the same base → add a revision suffix (`2.1.3-tron-r2`, `2.1.3-tron-r3`, …)
 - Never jump ahead of main's version number (e.g. do not use `2.2.0-tron` while main is still at `2.1.3`)
 
-**GenericErrors.sol** is a shared library — never remove or rename existing errors (selectors are part of the ABI). (Version-bump-on-add is covered under Error Handling.)
+**GenericErrors.sol** is a shared library — never remove or rename existing errors (selectors are part of the ABI).
 
 ## Blank Lines ([CONV:BLANKLINES])
 
