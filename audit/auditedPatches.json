@@ -1,0 +1,12 @@
+{
+  "src/Libraries/LibAsset.sol": {
+    "patchedSourceHash": "0x2c6cc95adac48b2f1a7486b89bed0ba17238c8085133a32a7cc58218ecbb141f",
+    "upstreamCommit": "09c14a1c4606d0054940bb8157d8d0965b764a15",
+    "auditId": "audit20260522"
+  },
+  "src/Helpers/WithdrawablePeriphery.sol": {
+    "patchedSourceHash": "0x04e9e00b259b92d8a5135bfbca765a9af80cde6b02be77c278cd5e9c48de8b0c",
+    "upstreamCommit": "09c14a1c4606d0054940bb8157d8d0965b764a15",
+    "auditId": "audit20260522"
+  }
+}

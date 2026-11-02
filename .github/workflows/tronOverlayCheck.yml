@@ -1,0 +1,65 @@
+# Tron Overlay Check (EXSC-858)
+# - Fails a PR that merges upstream commits and would undo a Tron overlay. An
+#   overlay is a src/**/*.sol file with a "-tron" @custom:version on main. Each
+#   overlay the sync reached must still exist, keep the suffix, keep every line
+#   the fork added on top of upstream, and carry upstream's version before the
+#   suffix. Logic: script/tasks/checkTronOverlays.ts.
+# - Runs on every PR to main so it can be a required check. A PR that brings in
+#   no new upstream commits passes without checking: ordinary PRs that edit an
+#   overlay are reviewed and audit-gated already.
+# - Checks the PR merge ref (what would land on main). The script derives the
+#   upstream side itself, from merge-bases with upstream/main, so upstream moving
+#   on after the sync is not a failure.
+# - Re-runs on every push (a conflict resolution) and on label changes. The
+#   tron-overlay-change-accepted label turns failures into printed overrides,
+#   for a deliberate rebase or retirement of an overlay.
+
+name: Tron Overlay Check
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+
+permissions: {}
+
+concurrency:
+  group: tron-overlay-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  tron-overlay-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read # required to fetch repository contents
+    steps:
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # merge-base needs the full history of both sides
+
+      - name: Fetch upstream lifinance/contracts
+        run: git fetch --no-tags https://github.com/lifinance/contracts.git main:refs/remotes/upstream/main
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        with:
+          bun-version-file: package.json
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Check Tron overlays
+        env:
+          ACCEPTED: ${{ contains(github.event.pull_request.labels.*.name, 'tron-overlay-change-accepted') }}
+        run: |
+          set -euo pipefail
+          FLAGS=()
+          if [ "${ACCEPTED}" = true ]; then
+            echo -e "\033[33mtron-overlay-change-accepted is set; failed checks are reported, not enforced\033[0m"
+            FLAGS+=(--accept-overlay-change)
+          fi
+          ##### HEAD is the PR merge ref: HEAD^1 is main, HEAD is what would land.
+          bunx tsx script/tasks/checkTronOverlays.ts \
+            --before HEAD^1 --after HEAD --upstream upstream/main "${FLAGS[@]}"
