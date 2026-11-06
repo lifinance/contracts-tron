@@ -27,6 +27,7 @@
     "*.yml",
     "*.yaml",
     "*.toml",
-    "*.html"
+    "*.html",
+    "script/demoScripts/demoChainflip.ts"
   ]
 }
