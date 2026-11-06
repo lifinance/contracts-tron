@@ -71,6 +71,24 @@ out = "out/zksync"
 zksolc = "1.5.15"
 foundry_zksync = "v0.0.32"
 
+# Solidity formatting (replaces prettier-plugin-solidity). Mirrors the old
+# .prettierrc.cjs `*.sol` override: printWidth 79, tabWidth 4, double quotes,
+# bracketSpacing true; params_first_multi matches prettier's function headers.
+# src/ is ignored on purpose: forge fmt's style differs from prettier's, so
+# reformatting src/ would change the audit-relevant source hash
+# (script/deploy/audit/audit-relevant-source.ts) of every audited contract and
+# force version bumps and re-audits. Drop it from `ignore` in a dedicated,
+# audit-coordinated change.
+[fmt]
+line_length = 79
+tab_width = 4
+quote_style = "double"
+bracket_spacing = true
+int_types = "preserve"
+number_underscore = "preserve"
+multiline_func_header = "params_first_multi"
+ignore = ["lib/**", "src/**"]
+
 [lint]
 lint_on_build = false
 
