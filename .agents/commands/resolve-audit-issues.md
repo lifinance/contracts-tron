@@ -164,7 +164,7 @@ ln -s <main-checkout>/.env .env            # framework/deploy scripts read the s
 command above is the portable idiom and works on any clean checkout.)
 
 Verify the base is right: `git log <pr_head>..HEAD` should be empty (you branched from the PR
-head, not from stale main). See the worktree memories for the submodule / typechain / prettier
+head, not from stale main). See the worktree memories for the submodule / typechain / formatter
 traps.
 
 ## Step 5 — Triage (the one gate)
@@ -229,7 +229,7 @@ Process issues independently. For each **Fix**:
    fix(<Facet>): <short finding title> (audit <owner>/<repo>#<n>)
    ```
 
-   Record the full commit SHA for the reply. The pre-commit hook runs Solhint + Prettier
+   Record the full commit SHA for the reply. The pre-commit hook runs Solhint + oxfmt / forge fmt
    (lint-staged auto-fixes formatting into the commit); if it reports a Solhint error, fix the
    code — never bypass the hook with `--no-verify`.
 

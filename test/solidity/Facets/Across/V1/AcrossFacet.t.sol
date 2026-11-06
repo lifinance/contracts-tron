@@ -4,16 +4,18 @@ pragma solidity ^0.8.17;
 import { TestBaseFacet } from "../../../utils/TestBaseFacet.sol";
 import { AcrossFacet } from "lifi/Facets/AcrossFacet.sol";
 import { IAcrossSpokePool } from "lifi/Interfaces/IAcrossSpokePool.sol";
-import { TestWhitelistManagerBase } from "../../../utils/TestWhitelistManagerBase.sol";
+import {
+    TestWhitelistManagerBase
+} from "../../../utils/TestWhitelistManagerBase.sol";
 
 // Stub AcrossFacet Contract
 contract TestAcrossFacet is AcrossFacet, TestWhitelistManagerBase {
     address internal constant ADDRESS_WRAPPED_NATIVE =
         0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
 
-    constructor(
-        IAcrossSpokePool _spokePool
-    ) AcrossFacet(_spokePool, ADDRESS_WRAPPED_NATIVE) {}
+    constructor(IAcrossSpokePool _spokePool)
+        AcrossFacet(_spokePool, ADDRESS_WRAPPED_NATIVE)
+    { }
 }
 
 contract AcrossFacetTest is TestBaseFacet {
@@ -34,24 +36,20 @@ contract AcrossFacetTest is TestBaseFacet {
         acrossFacet = new TestAcrossFacet(IAcrossSpokePool(SPOKE_POOL));
         bytes4[] memory functionSelectors = new bytes4[](3);
         functionSelectors[0] = acrossFacet.startBridgeTokensViaAcross.selector;
-        functionSelectors[1] = acrossFacet
-            .swapAndStartBridgeTokensViaAcross
-            .selector;
+        functionSelectors[1] =
+        acrossFacet.swapAndStartBridgeTokensViaAcross.selector;
         functionSelectors[2] = acrossFacet.addAllowedContractSelector.selector;
 
         addFacet(diamond, address(acrossFacet), functionSelectors);
         acrossFacet = TestAcrossFacet(address(diamond));
         acrossFacet.addAllowedContractSelector(
-            ADDRESS_UNISWAP,
-            uniswap.swapExactTokensForTokens.selector
+            ADDRESS_UNISWAP, uniswap.swapExactTokensForTokens.selector
         );
         acrossFacet.addAllowedContractSelector(
-            ADDRESS_UNISWAP,
-            uniswap.swapTokensForExactETH.selector
+            ADDRESS_UNISWAP, uniswap.swapTokensForExactETH.selector
         );
         acrossFacet.addAllowedContractSelector(
-            ADDRESS_UNISWAP,
-            uniswap.swapETHForExactTokens.selector
+            ADDRESS_UNISWAP, uniswap.swapETHForExactTokens.selector
         );
 
         setFacetAddressInTestBase(address(acrossFacet), "AcrossFacet");
@@ -75,27 +73,27 @@ contract AcrossFacetTest is TestBaseFacet {
         if (isNative) {
             acrossFacet.startBridgeTokensViaAcross{
                 value: bridgeData.minAmount
-            }(bridgeData, validAcrossData);
-        } else {
-            acrossFacet.startBridgeTokensViaAcross(
-                bridgeData,
-                validAcrossData
+            }(
+                bridgeData, validAcrossData
             );
+        } else {
+            acrossFacet.startBridgeTokensViaAcross(bridgeData, validAcrossData);
         }
     }
 
-    function initiateSwapAndBridgeTxWithFacet(
-        bool isNative
-    ) internal override {
+    function initiateSwapAndBridgeTxWithFacet(bool isNative)
+        internal
+        override
+    {
         if (isNative) {
             acrossFacet.swapAndStartBridgeTokensViaAcross{
                 value: swapData[0].fromAmount
-            }(bridgeData, swapData, validAcrossData);
+            }(
+                bridgeData, swapData, validAcrossData
+            );
         } else {
             acrossFacet.swapAndStartBridgeTokensViaAcross(
-                bridgeData,
-                swapData,
-                validAcrossData
+                bridgeData, swapData, validAcrossData
             );
         }
     }

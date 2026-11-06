@@ -3,21 +3,31 @@ pragma solidity ^0.8.17;
 
 import { TestBaseFacet } from "../utils/TestBaseFacet.sol";
 import { ERC20 } from "lib/solmate/src/tokens/ERC20.sol";
-import { IERC20 } from "lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import {
+    IERC20
+} from "lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import { LibSwap } from "../../../src/Libraries/LibSwap.sol";
 import { EcoFacet } from "../../../src/Facets/EcoFacet.sol";
 import { IEcoPortal } from "../../../src/Interfaces/IEcoPortal.sol";
 import { ILiFi } from "../../../src/Interfaces/ILiFi.sol";
-import { InvalidConfig, InvalidReceiver, InvalidNonEVMReceiver, InvalidSignature, NativeAssetNotSupported } from "../../../src/Errors/GenericErrors.sol";
+import {
+    InvalidConfig,
+    InvalidReceiver,
+    InvalidNonEVMReceiver,
+    InvalidSignature,
+    NativeAssetNotSupported
+} from "../../../src/Errors/GenericErrors.sol";
 import { LibBytes } from "../../../src/Libraries/LibBytes.sol";
-import { TestWhitelistManagerBase } from "../utils/TestWhitelistManagerBase.sol";
+import {
+    TestWhitelistManagerBase
+} from "../utils/TestWhitelistManagerBase.sol";
 import { TestEcoBackendSig } from "../utils/TestEcoBackendSig.sol";
 
 contract TestEcoFacet is EcoFacet, TestWhitelistManagerBase {
     constructor(
         IEcoPortal _portal,
         address _backendSigner
-    ) EcoFacet(_portal, _backendSigner) {}
+    ) EcoFacet(_portal, _backendSigner) { }
 }
 
 contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
@@ -50,25 +60,20 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
 
         bytes4[] memory functionSelectors = new bytes4[](3);
         functionSelectors[0] = ecoFacet.startBridgeTokensViaEco.selector;
-        functionSelectors[1] = ecoFacet
-            .swapAndStartBridgeTokensViaEco
-            .selector;
+        functionSelectors[1] = ecoFacet.swapAndStartBridgeTokensViaEco.selector;
         functionSelectors[2] = ecoFacet.addAllowedContractSelector.selector;
 
         addFacet(diamond, address(ecoFacet), functionSelectors);
         ecoFacet = TestEcoFacet(address(diamond));
         ecoVerifyingContract = address(diamond);
         ecoFacet.addAllowedContractSelector(
-            ADDRESS_UNISWAP,
-            uniswap.swapExactTokensForTokens.selector
+            ADDRESS_UNISWAP, uniswap.swapExactTokensForTokens.selector
         );
         ecoFacet.addAllowedContractSelector(
-            ADDRESS_UNISWAP,
-            uniswap.swapTokensForExactETH.selector
+            ADDRESS_UNISWAP, uniswap.swapTokensForExactETH.selector
         );
         ecoFacet.addAllowedContractSelector(
-            ADDRESS_UNISWAP,
-            uniswap.swapETHForExactTokens.selector
+            ADDRESS_UNISWAP, uniswap.swapETHForExactTokens.selector
         );
 
         setFacetAddressInTestBase(address(ecoFacet), "EcoFacet");
@@ -107,9 +112,7 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
     ) internal {
         _ecoData.signature = _signEcoData(_bridgeData, _ecoData);
         ecoFacet.swapAndStartBridgeTokensViaEco(
-            _bridgeData,
-            _swapData,
-            _ecoData
+            _bridgeData, _swapData, _ecoData
         );
     }
 
@@ -187,11 +190,8 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
             })
         );
 
-        bytes memory validRoute = _createEncodedRoute(
-            USER_RECEIVER,
-            ADDRESS_USDC,
-            100 * 10 ** 6
-        );
+        bytes memory validRoute =
+            _createEncodedRoute(USER_RECEIVER, ADDRESS_USDC, 100 * 10 ** 6);
 
         EcoFacet.EcoData memory ecoData = EcoFacet.EcoData({
             nonEVMReceiver: "",
@@ -209,17 +209,15 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
         // Should revert when trying to swap and bridge native tokens
         vm.expectRevert(NativeAssetNotSupported.selector);
         ecoFacet.swapAndStartBridgeTokensViaEco{ value: 0.0001 ether }(
-            bridgeData,
-            swapData,
-            ecoData
+            bridgeData, swapData, ecoData
         );
 
         vm.stopPrank();
     }
 
-    function testBase_CanBridgeNativeTokens() public override {}
+    function testBase_CanBridgeNativeTokens() public override { }
 
-    function testBase_CanSwapAndBridgeNativeTokens() public override {}
+    function testBase_CanSwapAndBridgeNativeTokens() public override { }
 
     // Override the base test to handle ERC20 token rewards properly
     function testBase_CanBridgeTokens()
@@ -290,10 +288,8 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
         uint256 totalAmountNeeded = defaultUSDCAmount + TOKEN_SOLVER_REWARD;
 
         // Calculate DAI amount needed to get totalAmountNeeded USDC
-        uint256[] memory amounts = uniswap.getAmountsIn(
-            totalAmountNeeded,
-            path
-        );
+        uint256[] memory amounts =
+            uniswap.getAmountsIn(totalAmountNeeded, path);
         uint256 amountIn = amounts[0];
 
         swapData.push(
@@ -358,12 +354,12 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
         bridgeData.receiver = NON_EVM_ADDRESS; // Must use NON_EVM_ADDRESS for Solana
 
         // Solana uses CalldataWithAccounts encoding
-        bytes
-            memory solanaEncodedRoute = hex"52a01d29f1d91ab0b57761768e39b85275adf37a9da16dd3640f0f461d2b34e18b15d4680000000065cbce824f4b3a8beb4f9dd87eab57c8cc24eee9bbb886ee4d3206cdb9628ad7000000000000000001000000c6fa7af3bedbad3a3d65f36aabc97431b1bbe4c2d2f6e0e47ca60203452f5d6164454c00000000000100000006ddf6e1d765a193d9cbe146ceeb79ac1cb485ed5f5b37913a8cf5857eff00a99b0000000a0000000c64454c0000000000060404000000dadaffa20d79347c07967829bb1a2fb4527985bb805d6e4e1bdaa132452b31630001c6fa7af3bedbad3a3d65f36aabc97431b1bbe4c2d2f6e0e47ca60203452f5d6100008f37c499ccbb92cefe5acc2f7aa22edf71d4237d4817e55671c7962b449e79f2000148c1d430876bafc918c7395041939a101ea72fead56b9ec8c4b8e5c7f76d363b0000"; // [pre-commit-checker: not a secret]
+        bytes memory solanaEncodedRoute =
+            hex"52a01d29f1d91ab0b57761768e39b85275adf37a9da16dd3640f0f461d2b34e18b15d4680000000065cbce824f4b3a8beb4f9dd87eab57c8cc24eee9bbb886ee4d3206cdb9628ad7000000000000000001000000c6fa7af3bedbad3a3d65f36aabc97431b1bbe4c2d2f6e0e47ca60203452f5d6164454c00000000000100000006ddf6e1d765a193d9cbe146ceeb79ac1cb485ed5f5b37913a8cf5857eff00a99b0000000a0000000c64454c0000000000060404000000dadaffa20d79347c07967829bb1a2fb4527985bb805d6e4e1bdaa132452b31630001c6fa7af3bedbad3a3d65f36aabc97431b1bbe4c2d2f6e0e47ca60203452f5d6100008f37c499ccbb92cefe5acc2f7aa22edf71d4237d4817e55671c7962b449e79f2000148c1d430876bafc918c7395041939a101ea72fead56b9ec8c4b8e5c7f76d363b0000"; // [pre-commit-checker: not a secret]
 
         // Dev Solana address (base58 encoded address in bytes)
-        bytes
-            memory solanaAddress = hex"32576271585272443245527261533541747453486e5345646d7242657532546e39344471554872436d576b7a";
+        bytes memory solanaAddress =
+            hex"32576271585272443245527261533541747453486e5345646d7242657532546e39344471554872436d576b7a";
 
         EcoFacet.EcoData memory ecoData = EcoFacet.EcoData({
             nonEVMReceiver: solanaAddress,
@@ -407,9 +403,7 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
 
         // Tron uses the same Route struct encoding as EVM chains
         bytes memory tronEncodedRoute = _createEncodedRoute(
-            USER_RECEIVER,
-            bridgeData.sendingAssetId,
-            bridgeData.minAmount
+            USER_RECEIVER, bridgeData.sendingAssetId, bridgeData.minAmount
         );
 
         EcoFacet.EcoData memory ecoData = EcoFacet.EcoData({
@@ -450,9 +444,7 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
 
         // Route pays USER_RECEIVER but nonEVMReceiver points at a different address
         bytes memory tronEncodedRoute = _createEncodedRoute(
-            USER_RECEIVER,
-            bridgeData.sendingAssetId,
-            bridgeData.minAmount
+            USER_RECEIVER, bridgeData.sendingAssetId, bridgeData.minAmount
         );
 
         EcoFacet.EcoData memory ecoData = EcoFacet.EcoData({
@@ -483,9 +475,7 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
         bridgeData.receiver = NON_EVM_ADDRESS;
 
         bytes memory tronEncodedRoute = _createEncodedRoute(
-            USER_RECEIVER,
-            bridgeData.sendingAssetId,
-            bridgeData.minAmount
+            USER_RECEIVER, bridgeData.sendingAssetId, bridgeData.minAmount
         );
 
         EcoFacet.EcoData memory ecoData = EcoFacet.EcoData({
@@ -519,14 +509,11 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
         // low 20 bytes but with dirty high bytes. The receiver emitted on-chain
         // must equal the validated one, so a non-left-padded value is rejected.
         bytes memory tronEncodedRoute = _createEncodedRoute(
-            USER_RECEIVER,
-            bridgeData.sendingAssetId,
-            bridgeData.minAmount
+            USER_RECEIVER, bridgeData.sendingAssetId, bridgeData.minAmount
         );
 
-        bytes32 dirtyReceiver = bytes32(
-            (uint256(1) << 160) | uint256(uint160(USER_RECEIVER))
-        );
+        bytes32 dirtyReceiver =
+            bytes32((uint256(1) << 160) | uint256(uint160(USER_RECEIVER)));
 
         EcoFacet.EcoData memory ecoData = EcoFacet.EcoData({
             nonEVMReceiver: abi.encodePacked(dirtyReceiver),
@@ -545,8 +532,7 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                LibBytes.NotAnAddress.selector,
-                dirtyReceiver
+                LibBytes.NotAnAddress.selector, dirtyReceiver
             )
         );
         _startEco(bridgeData, ecoData);
@@ -563,9 +549,7 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
         // A zero non-EVM receiver must be rejected, mirroring the EVM path where
         // validateBridgeData already rejects a zero bridgeData.receiver.
         bytes memory tronEncodedRoute = _createEncodedRoute(
-            address(0),
-            bridgeData.sendingAssetId,
-            bridgeData.minAmount
+            address(0), bridgeData.sendingAssetId, bridgeData.minAmount
         );
 
         EcoFacet.EcoData memory ecoData = EcoFacet.EcoData({
@@ -597,21 +581,17 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
 
         // Route whose final call is not a transfer(address,uint256); the receiver
         // decode must reject it instead of reading a bogus address.
-        IEcoPortal.TokenAmount[] memory tokens = new IEcoPortal.TokenAmount[](
-            1
-        );
+        IEcoPortal.TokenAmount[] memory tokens =
+            new IEcoPortal.TokenAmount[](1);
         tokens[0] = IEcoPortal.TokenAmount({
-            token: bridgeData.sendingAssetId,
-            amount: bridgeData.minAmount
+            token: bridgeData.sendingAssetId, amount: bridgeData.minAmount
         });
 
         EcoFacet.Call[] memory calls = new EcoFacet.Call[](1);
         calls[0] = EcoFacet.Call({
             target: bridgeData.sendingAssetId,
             callData: abi.encodeWithSelector(
-                IERC20.approve.selector,
-                USER_RECEIVER,
-                bridgeData.minAmount
+                IERC20.approve.selector, USER_RECEIVER, bridgeData.minAmount
             )
         });
 
@@ -654,20 +634,17 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
         // Final call carries the transfer selector but only 36 bytes of calldata
         // (selector + recipient word, missing the amount word); the receiver
         // decode must reject it via the length guard before reading the address.
-        IEcoPortal.TokenAmount[] memory tokens = new IEcoPortal.TokenAmount[](
-            1
-        );
+        IEcoPortal.TokenAmount[] memory tokens =
+            new IEcoPortal.TokenAmount[](1);
         tokens[0] = IEcoPortal.TokenAmount({
-            token: bridgeData.sendingAssetId,
-            amount: bridgeData.minAmount
+            token: bridgeData.sendingAssetId, amount: bridgeData.minAmount
         });
 
         EcoFacet.Call[] memory calls = new EcoFacet.Call[](1);
         calls[0] = EcoFacet.Call({
             target: bridgeData.sendingAssetId,
             callData: abi.encodeWithSelector(
-                IERC20.transfer.selector,
-                USER_RECEIVER
+                IERC20.transfer.selector, USER_RECEIVER
             )
         });
 
@@ -709,12 +686,10 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
 
         // Route decodes successfully but has no calls; the receiver decode must
         // reject it with InvalidReceiver rather than underflowing calls.length.
-        IEcoPortal.TokenAmount[] memory tokens = new IEcoPortal.TokenAmount[](
-            1
-        );
+        IEcoPortal.TokenAmount[] memory tokens =
+            new IEcoPortal.TokenAmount[](1);
         tokens[0] = IEcoPortal.TokenAmount({
-            token: bridgeData.sendingAssetId,
-            amount: bridgeData.minAmount
+            token: bridgeData.sendingAssetId, amount: bridgeData.minAmount
         });
 
         EcoFacet.Call[] memory calls = new EcoFacet.Call[](0);
@@ -757,9 +732,7 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
         bridgeData.receiver = USER_RECEIVER;
 
         bytes memory tronEncodedRoute = _createEncodedRoute(
-            USER_RECEIVER,
-            bridgeData.sendingAssetId,
-            bridgeData.minAmount
+            USER_RECEIVER, bridgeData.sendingAssetId, bridgeData.minAmount
         );
 
         EcoFacet.EcoData memory ecoData = EcoFacet.EcoData({
@@ -893,9 +866,7 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
 
         // Use the helper to create a properly encoded route
         bytes memory validRoute = _createEncodedRoute(
-            USER_RECEIVER,
-            ADDRESS_USDC,
-            overflowBridgeData.minAmount
+            USER_RECEIVER, ADDRESS_USDC, overflowBridgeData.minAmount
         );
 
         EcoFacet.EcoData memory ecoData = EcoFacet.EcoData({
@@ -910,8 +881,7 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
         });
 
         overflowBridgeData.minAmount =
-            overflowBridgeData.minAmount +
-            TOKEN_SOLVER_REWARD;
+            overflowBridgeData.minAmount + TOKEN_SOLVER_REWARD;
 
         usdc.approve(_facetTestContractAddress, overflowBridgeData.minAmount);
 
@@ -930,9 +900,7 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
         boundaryBridgeData.minAmount = 100 * 10 ** 6;
 
         bytes memory validRoute = _createEncodedRoute(
-            USER_RECEIVER,
-            ADDRESS_USDC,
-            boundaryBridgeData.minAmount
+            USER_RECEIVER, ADDRESS_USDC, boundaryBridgeData.minAmount
         );
 
         EcoFacet.EcoData memory ecoData = EcoFacet.EcoData({
@@ -947,8 +915,7 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
         });
 
         boundaryBridgeData.minAmount =
-            boundaryBridgeData.minAmount +
-            TOKEN_SOLVER_REWARD;
+            boundaryBridgeData.minAmount + TOKEN_SOLVER_REWARD;
 
         usdc.approve(_facetTestContractAddress, boundaryBridgeData.minAmount);
 
@@ -964,8 +931,8 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
         bridgeData.destinationChainId = 10; // Optimism
 
         // Create data that cannot be ABI decoded as a Route struct
-        bytes
-            memory invalidRoute = hex"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445";
+        bytes memory invalidRoute =
+            hex"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445";
 
         EcoFacet.EcoData memory ecoData = EcoFacet.EcoData({
             nonEVMReceiver: bytes(""),
@@ -1026,8 +993,8 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
         bridgeData.receiver = NON_EVM_ADDRESS;
 
         // Create data that cannot be ABI decoded as a Route struct
-        bytes
-            memory invalidTronRoute = hex"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"; // [pre-commit-checker: not a secret]
+        bytes memory invalidTronRoute =
+            hex"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"; // [pre-commit-checker: not a secret]
 
         EcoFacet.EcoData memory ecoData = EcoFacet.EcoData({
             nonEVMReceiver: abi.encode(USER_RECEIVER),
@@ -1058,9 +1025,7 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
 
         // Use the helper to create a properly encoded Route
         bytes memory validRoute = _createEncodedRoute(
-            USER_RECEIVER,
-            bridgeData.sendingAssetId,
-            bridgeData.minAmount
+            USER_RECEIVER, bridgeData.sendingAssetId, bridgeData.minAmount
         );
 
         EcoFacet.EcoData memory ecoData = EcoFacet.EcoData({
@@ -1094,11 +1059,8 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
 
         EcoFacet.EcoData memory ecoData = _getValidEcoData();
         uint256 unauthorizedKey = 0xBAD5169;
-        ecoData.signature = _signEcoDataWith(
-            unauthorizedKey,
-            bridgeData,
-            ecoData
-        );
+        ecoData.signature =
+            _signEcoDataWith(unauthorizedKey, bridgeData, ecoData);
 
         vm.expectRevert(InvalidSignature.selector);
         ecoFacet.startBridgeTokensViaEco(bridgeData, ecoData);
@@ -1136,9 +1098,7 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
         ecoData.signature = _signEcoData(bridgeData, ecoData);
 
         ecoData.encodedRoute = _createEncodedRoute(
-            USER_RECEIVER,
-            bridgeData.sendingAssetId,
-            bridgeData.minAmount + 1
+            USER_RECEIVER, bridgeData.sendingAssetId, bridgeData.minAmount + 1
         );
 
         vm.expectRevert(InvalidSignature.selector);
@@ -1175,9 +1135,7 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
 
         // Create a valid Route struct encoding
         bytes memory validRoute = _createEncodedRoute(
-            USER_RECEIVER,
-            bridgeData.sendingAssetId,
-            bridgeData.minAmount
+            USER_RECEIVER, bridgeData.sendingAssetId, bridgeData.minAmount
         );
 
         EcoFacet.EcoData memory ecoData = EcoFacet.EcoData({
@@ -1207,8 +1165,8 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
         bridgeData.destinationChainId = LIFI_CHAIN_ID_SOLANA;
         bridgeData.receiver = NON_EVM_ADDRESS;
 
-        bytes
-            memory solanaRoute = hex"9e6c10e6d964ed8b7015b410e7049dc1450b4bdcda6976d16b98dab756c33c2fa54fc9680000000065cbce824f4b3a8beb4f9dd87eab57c8cc24eee9bbb886ee4d3206cdb9628ad7"; // [pre-commit-checker: not a secret]
+        bytes memory solanaRoute =
+            hex"9e6c10e6d964ed8b7015b410e7049dc1450b4bdcda6976d16b98dab756c33c2fa54fc9680000000065cbce824f4b3a8beb4f9dd87eab57c8cc24eee9bbb886ee4d3206cdb9628ad7"; // [pre-commit-checker: not a secret]
 
         EcoFacet.EcoData memory ecoData = EcoFacet.EcoData({
             nonEVMReceiver: "",
@@ -1237,8 +1195,8 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
         bridgeData.destinationChainId = LIFI_CHAIN_ID_SOLANA;
         bridgeData.receiver = NON_EVM_ADDRESS;
 
-        bytes
-            memory solanaRoute = hex"fefd31b99638603f4dbb9bc6d42d223ec4b4d4ab5509910efa68063ba9f4fac57e0ed4680000000065cbce824f4b3a8beb4f9dd87eab57c8cc24eee9bbb886ee4d3206cdb9628ad7000000000000000001000000c6fa7af3bedbad3a3d65f36aabc97431b1bbe4c2d2f6e0e47ca60203452f5d6164454c00000000000100000006ddf6e1d765a193d9cbe146ceeb79ac1cb485ed5f5b37913a8cf5857eff00a99b0000000a0000000c64454c0000000000060404000000dadaffa20d79347c07967829bb1a2fb4527985bb805d6e4e1bdaa132452b31630001c6fa7af3bedbad3a3d65f36aabc97431b1bbe4c2d2f6e0e47ca60203452f5d6100008f37c499ccbb92cefe5acc2f7aa22edf71d4237d4817e55671c7962b449e79f2000148c1d430876bafc918c7395041939a101ea72fead56b9ec8c4b8e5c7f76d363b0000"; // [pre-commit-checker: not a secret]
+        bytes memory solanaRoute =
+            hex"fefd31b99638603f4dbb9bc6d42d223ec4b4d4ab5509910efa68063ba9f4fac57e0ed4680000000065cbce824f4b3a8beb4f9dd87eab57c8cc24eee9bbb886ee4d3206cdb9628ad7000000000000000001000000c6fa7af3bedbad3a3d65f36aabc97431b1bbe4c2d2f6e0e47ca60203452f5d6164454c00000000000100000006ddf6e1d765a193d9cbe146ceeb79ac1cb485ed5f5b37913a8cf5857eff00a99b0000000a0000000c64454c0000000000060404000000dadaffa20d79347c07967829bb1a2fb4527985bb805d6e4e1bdaa132452b31630001c6fa7af3bedbad3a3d65f36aabc97431b1bbe4c2d2f6e0e47ca60203452f5d6100008f37c499ccbb92cefe5acc2f7aa22edf71d4237d4817e55671c7962b449e79f2000148c1d430876bafc918c7395041939a101ea72fead56b9ec8c4b8e5c7f76d363b0000"; // [pre-commit-checker: not a secret]
 
         bytes memory tooLongAddress = new bytes(45);
         for (uint256 i = 0; i < 45; i++) {
@@ -1274,8 +1232,8 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
 
         bytes memory tooShortRoute = hex"9e6c10e6d964ed8b7015b410e7049dc1"; // [pre-commit-checker: not a secret]
 
-        bytes
-            memory solanaAddress = hex"32576271585272443245527261533541747453486e5345646d7242657532546e39344471554872436d576b7a"; // [pre-commit-checker: not a secret]
+        bytes memory solanaAddress =
+            hex"32576271585272443245527261533541747453486e5345646d7242657532546e39344471554872436d576b7a"; // [pre-commit-checker: not a secret]
 
         EcoFacet.EcoData memory ecoData = EcoFacet.EcoData({
             nonEVMReceiver: solanaAddress,
@@ -1306,12 +1264,12 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
         bridgeData.receiver = NON_EVM_ADDRESS; // Must use NON_EVM_ADDRESS for Solana
 
         // Solana uses CalldataWithAccounts encoding
-        bytes
-            memory solanaEncodedRoute = hex"52a01d29f1d91ab0b57761768e39b85275adf37a9da16dd3640f0f461d2b34e18b15d4680000000065cbce824f4b3a8beb4f9dd87eab57c8cc24eee9bbb886ee4d3206cdb9628ad7000000000000000001000000c6fa7af3bedbad3a3d65f36aabc97431b1bbe4c2d2f6e0e47ca60203452f5d6164454c00000000000100000006ddf6e1d765a193d9cbe146ceeb79ac1cb485ed5f5b37913a8cf5857eff00a99b0000000a0000000c64454c0000000000060404000000dadaffa20d79347c07967829bb1a2fb4527985bb805d6e4e1bdaa132452b31630001c6fa7af3bedbad3a3d65f36aabc97431b1bbe4c2d2f6e0e47ca60203452f5d6100008f37c499ccbb92cefe5acc2f7aa22edf71d4237d4817e55671c7962b449e79f2000148c1d430876bafc918c7395041939a101ea72fead56b9ec8c4b8e5c7f76d363b0000"; // [pre-commit-checker: not a secret]
+        bytes memory solanaEncodedRoute =
+            hex"52a01d29f1d91ab0b57761768e39b85275adf37a9da16dd3640f0f461d2b34e18b15d4680000000065cbce824f4b3a8beb4f9dd87eab57c8cc24eee9bbb886ee4d3206cdb9628ad7000000000000000001000000c6fa7af3bedbad3a3d65f36aabc97431b1bbe4c2d2f6e0e47ca60203452f5d6164454c00000000000100000006ddf6e1d765a193d9cbe146ceeb79ac1cb485ed5f5b37913a8cf5857eff00a99b0000000a0000000c64454c0000000000060404000000dadaffa20d79347c07967829bb1a2fb4527985bb805d6e4e1bdaa132452b31630001c6fa7af3bedbad3a3d65f36aabc97431b1bbe4c2d2f6e0e47ca60203452f5d6100008f37c499ccbb92cefe5acc2f7aa22edf71d4237d4817e55671c7962b449e79f2000148c1d430876bafc918c7395041939a101ea72fead56b9ec8c4b8e5c7f76d363b0000"; // [pre-commit-checker: not a secret]
 
         // Dev Solana address (base58 encoded address in bytes)
-        bytes
-            memory solanaAddress = hex"32576271585272443245527261533541747453486e5345646d7242657532546e39344471554872436d576b7a";
+        bytes memory solanaAddress =
+            hex"32576271585272443245527261533541747453486e5345646d7242657532546e39344471554872436d576b7a";
 
         EcoFacet.EcoData memory ecoData = EcoFacet.EcoData({
             nonEVMReceiver: solanaAddress, // Required for NON_EVM_ADDRESS
@@ -1345,12 +1303,12 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
         bridgeData.receiver = NON_EVM_ADDRESS; // Must use NON_EVM_ADDRESS for Solana
 
         // Solana uses CalldataWithAccounts encoding
-        bytes
-            memory solanaEncodedRoute = hex"52a01d29f1d91ab0b57761768e39b85275adf37a9da16dd3640f0f461d2b34e18b15d4680000000065cbce824f4b3a8beb4f9dd87eab57c8cc24eee9bbb886ee4d3206cdb9628ad7000000000000000001000000c6fa7af3bedbad3a3d65f36aabc97431b1bbe4c2d2f6e0e47ca60203452f5d6164454c00000000000100000006ddf6e1d765a193d9cbe146ceeb79ac1cb485ed5f5b37913a8cf5857eff00a99b0000000a0000000c64454c0000000000060404000000dadaffa20d79347c07967829bb1a2fb4527985bb805d6e4e1bdaa132452b31630001c6fa7af3bedbad3a3d65f36aabc97431b1bbe4c2d2f6e0e47ca60203452f5d6100008f37c499ccbb92cefe5acc2f7aa22edf71d4237d4817e55671c7962b449e79f2000148c1d430876bafc918c7395041939a101ea72fead56b9ec8c4b8e5c7f76d363b0000"; // [pre-commit-checker: not a secret]
+        bytes memory solanaEncodedRoute =
+            hex"52a01d29f1d91ab0b57761768e39b85275adf37a9da16dd3640f0f461d2b34e18b15d4680000000065cbce824f4b3a8beb4f9dd87eab57c8cc24eee9bbb886ee4d3206cdb9628ad7000000000000000001000000c6fa7af3bedbad3a3d65f36aabc97431b1bbe4c2d2f6e0e47ca60203452f5d6164454c00000000000100000006ddf6e1d765a193d9cbe146ceeb79ac1cb485ed5f5b37913a8cf5857eff00a99b0000000a0000000c64454c0000000000060404000000dadaffa20d79347c07967829bb1a2fb4527985bb805d6e4e1bdaa132452b31630001c6fa7af3bedbad3a3d65f36aabc97431b1bbe4c2d2f6e0e47ca60203452f5d6100008f37c499ccbb92cefe5acc2f7aa22edf71d4237d4817e55671c7962b449e79f2000148c1d430876bafc918c7395041939a101ea72fead56b9ec8c4b8e5c7f76d363b0000"; // [pre-commit-checker: not a secret]
 
         // Dev Solana address (base58 encoded address in bytes)
-        bytes
-            memory solanaAddress = hex"32576271585272443245527261533541747453486e5345646d7242657532546e39344471554872436d576b7a";
+        bytes memory solanaAddress =
+            hex"32576271585272443245527261533541747453486e5345646d7242657532546e39344471554872436d576b7a";
 
         EcoFacet.EcoData memory ecoData = EcoFacet.EcoData({
             nonEVMReceiver: solanaAddress, // Required for NON_EVM_ADDRESS
@@ -1379,11 +1337,8 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
     function testRevert_RefundRecipientZeroAddress() public {
         vm.startPrank(USER_SENDER);
 
-        bytes memory validRoute = _createEncodedRoute(
-            USER_RECEIVER,
-            ADDRESS_USDC,
-            100 * 10 ** 6
-        );
+        bytes memory validRoute =
+            _createEncodedRoute(USER_RECEIVER, ADDRESS_USDC, 100 * 10 ** 6);
 
         EcoFacet.EcoData memory ecoData = EcoFacet.EcoData({
             nonEVMReceiver: "",
@@ -1412,9 +1367,7 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
         address customRefundRecipient = address(0xABCD);
 
         bytes memory validRoute = _createEncodedRoute(
-            USER_RECEIVER,
-            bridgeData.sendingAssetId,
-            bridgeData.minAmount
+            USER_RECEIVER, bridgeData.sendingAssetId, bridgeData.minAmount
         );
 
         EcoFacet.EcoData memory ecoData = EcoFacet.EcoData({
@@ -1432,11 +1385,10 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
 
         usdc.approve(_facetTestContractAddress, bridgeData.minAmount);
 
-        IEcoPortal.TokenAmount[]
-            memory rewardTokens = new IEcoPortal.TokenAmount[](1);
+        IEcoPortal.TokenAmount[] memory rewardTokens =
+            new IEcoPortal.TokenAmount[](1);
         rewardTokens[0] = IEcoPortal.TokenAmount({
-            token: bridgeData.sendingAssetId,
-            amount: bridgeData.minAmount
+            token: bridgeData.sendingAssetId, amount: bridgeData.minAmount
         });
 
         IEcoPortal.Reward memory expectedReward = IEcoPortal.Reward({
@@ -1472,9 +1424,8 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
         uint256 amount
     ) internal view returns (bytes memory) {
         // Create token array for the route
-        IEcoPortal.TokenAmount[] memory tokens = new IEcoPortal.TokenAmount[](
-            1
-        );
+        IEcoPortal.TokenAmount[] memory tokens =
+            new IEcoPortal.TokenAmount[](1);
         tokens[0] = IEcoPortal.TokenAmount({ token: token, amount: amount });
 
         // Create calls array with exactly one call - the ERC20 transfer to receiver
@@ -1482,9 +1433,7 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
         calls[0] = EcoFacet.Call({
             target: token,
             callData: abi.encodeWithSelector(
-                IERC20.transfer.selector,
-                receiver,
-                amount
+                IERC20.transfer.selector, receiver, amount
             )
         });
 
@@ -1507,23 +1456,21 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
         view
         returns (EcoFacet.EcoData memory)
     {
-        bytes memory encodedRoute = _createEncodedRoute(
-            USER_RECEIVER,
-            bridgeData.sendingAssetId,
-            bridgeData.minAmount
-        );
+        bytes memory encodedRoute =
+            _createEncodedRoute(
+                USER_RECEIVER, bridgeData.sendingAssetId, bridgeData.minAmount
+            );
 
-        return
-            EcoFacet.EcoData({
-                nonEVMReceiver: "",
-                prover: address(0x1234),
-                rewardDeadline: uint64(block.timestamp + 2 days),
-                encodedRoute: encodedRoute,
-                solanaATA: bytes32(0),
-                refundRecipient: USER_SENDER,
-                deadline: block.timestamp + 1 hours,
-                signature: ""
-            });
+        return EcoFacet.EcoData({
+            nonEVMReceiver: "",
+            prover: address(0x1234),
+            rewardDeadline: uint64(block.timestamp + 2 days),
+            encodedRoute: encodedRoute,
+            solanaATA: bytes32(0),
+            refundRecipient: USER_SENDER,
+            deadline: block.timestamp + 1 hours,
+            signature: ""
+        });
     }
 
     function testRevert_DuplicateBridgeCallIntentAlreadyFunded() public {
@@ -1553,10 +1500,8 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
 
         uint256 totalAmountNeeded = defaultUSDCAmount + TOKEN_SOLVER_REWARD;
 
-        uint256[] memory amounts = uniswap.getAmountsIn(
-            totalAmountNeeded,
-            path
-        );
+        uint256[] memory amounts =
+            uniswap.getAmountsIn(totalAmountNeeded, path);
         uint256 amountIn = amounts[0];
 
         uint256 amountInWithSlippage = (amountIn * 110) / 100;
@@ -1594,9 +1539,7 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
             prover: address(0x1234),
             rewardDeadline: uint64(block.timestamp + 2 days),
             encodedRoute: _createEncodedRoute(
-                USER_RECEIVER,
-                bridgeData.sendingAssetId,
-                bridgeData.minAmount
+                USER_RECEIVER, bridgeData.sendingAssetId, bridgeData.minAmount
             ),
             solanaATA: bytes32(0),
             refundRecipient: refundRecipient,
@@ -1620,11 +1563,8 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
     function testRevert_ProverZeroAddress() public {
         vm.startPrank(USER_SENDER);
 
-        bytes memory validRoute = _createEncodedRoute(
-            USER_RECEIVER,
-            ADDRESS_USDC,
-            100 * 10 ** 6
-        );
+        bytes memory validRoute =
+            _createEncodedRoute(USER_RECEIVER, ADDRESS_USDC, 100 * 10 ** 6);
 
         EcoFacet.EcoData memory ecoData = EcoFacet.EcoData({
             nonEVMReceiver: "",
@@ -1650,11 +1590,8 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
     function testRevert_RewardDeadlineExpired() public {
         vm.startPrank(USER_SENDER);
 
-        bytes memory validRoute = _createEncodedRoute(
-            USER_RECEIVER,
-            ADDRESS_USDC,
-            100 * 10 ** 6
-        );
+        bytes memory validRoute =
+            _createEncodedRoute(USER_RECEIVER, ADDRESS_USDC, 100 * 10 ** 6);
 
         EcoFacet.EcoData memory ecoData = EcoFacet.EcoData({
             nonEVMReceiver: "",
@@ -1683,11 +1620,8 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
         bridgeData.receiver = NON_EVM_ADDRESS;
         bridgeData.destinationChainId = 10;
 
-        bytes memory validRoute = _createEncodedRoute(
-            USER_RECEIVER,
-            ADDRESS_USDC,
-            100 * 10 ** 6
-        );
+        bytes memory validRoute =
+            _createEncodedRoute(USER_RECEIVER, ADDRESS_USDC, 100 * 10 ** 6);
 
         EcoFacet.EcoData memory ecoData = EcoFacet.EcoData({
             nonEVMReceiver: hex"32576271585272443245527261533541747453486e5345646d7242657532546e39344471554872436d576b7a",
@@ -1716,8 +1650,8 @@ contract EcoFacetTest is TestBaseFacet, TestEcoBackendSig {
         bridgeData.destinationChainId = LIFI_CHAIN_ID_SOLANA;
         bridgeData.receiver = NON_EVM_ADDRESS;
 
-        bytes
-            memory solanaEncodedRoute = hex"52a01d29f1d91ab0b57761768e39b85275adf37a9da16dd3640f0f461d2b34e18b15d4680000000065cbce824f4b3a8beb4f9dd87eab57c8cc24eee9bbb886ee4d3206cdb9628ad7000000000000000001000000c6fa7af3bedbad3a3d65f36aabc97431b1bbe4c2d2f6e0e47ca60203452f5d6164454c00000000000100000006ddf6e1d765a193d9cbe146ceeb79ac1cb485ed5f5b37913a8cf5857eff00a99b0000000a0000000c64454c0000000000060404000000dadaffa20d79347c07967829bb1a2fb4527985bb805d6e4e1bdaa132452b31630001c6fa7af3bedbad3a3d65f36aabc97431b1bbe4c2d2f6e0e47ca60203452f5d6100008f37c499ccbb92cefe5acc2f7aa22edf71d4237d4817e55671c7962b449e79f2000148c1d430876bafc918c7395041939a101ea72fead56b9ec8c4b8e5c7f76d363b0000";
+        bytes memory solanaEncodedRoute =
+            hex"52a01d29f1d91ab0b57761768e39b85275adf37a9da16dd3640f0f461d2b34e18b15d4680000000065cbce824f4b3a8beb4f9dd87eab57c8cc24eee9bbb886ee4d3206cdb9628ad7000000000000000001000000c6fa7af3bedbad3a3d65f36aabc97431b1bbe4c2d2f6e0e47ca60203452f5d6164454c00000000000100000006ddf6e1d765a193d9cbe146ceeb79ac1cb485ed5f5b37913a8cf5857eff00a99b0000000a0000000c64454c0000000000060404000000dadaffa20d79347c07967829bb1a2fb4527985bb805d6e4e1bdaa132452b31630001c6fa7af3bedbad3a3d65f36aabc97431b1bbe4c2d2f6e0e47ca60203452f5d6100008f37c499ccbb92cefe5acc2f7aa22edf71d4237d4817e55671c7962b449e79f2000148c1d430876bafc918c7395041939a101ea72fead56b9ec8c4b8e5c7f76d363b0000";
 
         bytes memory tooShortAddress = hex"32576271585272443245527261533541";
 

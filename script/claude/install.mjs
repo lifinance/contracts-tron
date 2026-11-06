@@ -26,7 +26,8 @@ import path from 'node:path'
 const TAG = '[claude:install]'
 const REPO_ROOT = process.cwd()
 const LOCK_PATH = path.join(REPO_ROOT, '.claude', 'plugins-lock.json')
-const CLAUDE_HOME = process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude')
+const CLAUDE_HOME =
+  process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude')
 const MARKETPLACES_DIR = path.join(CLAUDE_HOME, 'plugins', 'marketplaces')
 const KNOWN_FILE = path.join(CLAUDE_HOME, 'plugins', 'known_marketplaces.json')
 
@@ -39,7 +40,10 @@ function warn(msg) {
 }
 
 function git(args, opts = {}) {
-  return execFileSync('git', args, { stdio: ['ignore', 'pipe', 'pipe'], ...opts })
+  return execFileSync('git', args, {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    ...opts,
+  })
     .toString()
     .trim()
 }
@@ -81,13 +85,17 @@ function pinMarketplace(name, entry) {
   try {
     git(['-C', target, 'checkout', '--quiet', sha])
   } catch (e) {
-    console.error(`${TAG} ${name}: cannot checkout pinned sha ${sha} — ${e.message?.split('\n')[0] ?? e}`)
+    console.error(
+      `${TAG} ${name}: cannot checkout pinned sha ${sha} — ${e.message?.split('\n')[0] ?? e}`
+    )
     process.exit(1)
   }
 
   const head = git(['-C', target, 'rev-parse', 'HEAD'])
   if (head !== sha) {
-    console.error(`${TAG} ${name}: SHA MISMATCH after checkout. Expected ${sha}, got ${head}.`)
+    console.error(
+      `${TAG} ${name}: SHA MISMATCH after checkout. Expected ${sha}, got ${head}.`
+    )
     process.exit(1)
   }
 
@@ -125,7 +133,9 @@ function findInstalled(spec) {
 function installPlugin(spec) {
   const at = spec.lastIndexOf('@')
   if (at < 0) {
-    warn(`${spec}: invalid plugin spec (expected plugin@marketplace) — skipping`)
+    warn(
+      `${spec}: invalid plugin spec (expected plugin@marketplace) — skipping`
+    )
     return
   }
   const existing = findInstalled(spec)
@@ -149,7 +159,9 @@ function main() {
     return
   }
   if (!fs.existsSync(CLAUDE_HOME)) {
-    log(`${CLAUDE_HOME} not found — Claude Code not installed for this user, skipping`)
+    log(
+      `${CLAUDE_HOME} not found — Claude Code not installed for this user, skipping`
+    )
     return
   }
 
@@ -174,9 +186,13 @@ function main() {
 
   if (plugins.length === 0) return
 
-  const probe = spawnSync('claude', ['--version'], { stdio: ['ignore', 'pipe', 'pipe'] })
+  const probe = spawnSync('claude', ['--version'], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
   if (probe.status !== 0) {
-    warn(`'claude' CLI not on PATH — marketplaces registered, but skipping plugin install. Run 'bun run claude:install' after installing Claude Code.`)
+    warn(
+      `'claude' CLI not on PATH — marketplaces registered, but skipping plugin install. Run 'bun run claude:install' after installing Claude Code.`
+    )
     return
   }
 

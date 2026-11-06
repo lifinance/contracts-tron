@@ -771,7 +771,7 @@ describe('getExpectedPairs — periphery address resolution', () => {
           selectors: [{ selector: SEL, signature: 'runVM()' }],
         })),
       },
-    } as unknown as Parameters<typeof getExpectedPairs>[2])
+    }) as unknown as Parameters<typeof getExpectedPairs>[2]
 
   const run = async (
     entries: Array<{ name: string; address: string }>,
@@ -949,7 +949,7 @@ describe('checkWhitelistIntegrity expected-pending downgrade', () => {
     ({
       readContract: async ({ functionName }: { functionName: string }) =>
         functionName === 'getAllContractSelectorPairs' ? [[], []] : false,
-    } as unknown as PublicClient)
+    }) as unknown as PublicClient
 
   /** A diamond that already holds `PAIR`. */
   const syncedDiamond = () =>
@@ -958,7 +958,7 @@ describe('checkWhitelistIntegrity expected-pending downgrade', () => {
         functionName === 'getAllContractSelectorPairs'
           ? [[DEX], [[SELECTOR]]]
           : true,
-    } as unknown as PublicClient)
+    }) as unknown as PublicClient
 
   const queued = (selector: Hex): Map<string, IPendingRegistration[]> =>
     new Map([
@@ -1769,7 +1769,7 @@ describe('immutable-bindings-match-config declared-zero bindings', () => {
           c.getter,
           c.getter === 'SPOKE_POOL_PERIPHERY'
             ? OTHER
-            : c.expectedAddress ?? ZERO,
+            : (c.expectedAddress ?? ZERO),
         ])
       )
     )

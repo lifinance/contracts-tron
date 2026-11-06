@@ -8,7 +8,7 @@ import { AcrossFacet } from "lifi/Facets/AcrossFacet.sol";
 contract DeployScript is DeployScriptBase {
     using stdJson for string;
 
-    constructor() DeployScriptBase("AcrossFacet") {}
+    constructor() DeployScriptBase("AcrossFacet") { }
 
     function run()
         public
@@ -21,18 +21,14 @@ contract DeployScript is DeployScriptBase {
 
     function getConstructorArgs() internal override returns (bytes memory) {
         string memory configPath = string.concat(root, "/config/across.json");
-        string memory networksPath = string.concat(
-            root,
-            "/config/networks.json"
-        );
+        string memory networksPath =
+            string.concat(root, "/config/networks.json");
 
         address acrossSpokePool = _getConfigContractAddress(
-            configPath,
-            string.concat(".", network, ".acrossSpokePool")
+            configPath, string.concat(".", network, ".acrossSpokePool")
         );
         address wrappedNativeAddress = _getConfigContractAddress(
-            networksPath,
-            string.concat(".", network, ".wrappedNativeAddress")
+            networksPath, string.concat(".", network, ".wrappedNativeAddress")
         );
 
         return abi.encode(acrossSpokePool, wrappedNativeAddress);

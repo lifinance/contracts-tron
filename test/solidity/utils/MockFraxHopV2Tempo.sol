@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 pragma solidity ^0.8.17;
 
-import { IFraxHopV2, IFraxOFT, ITipFeeManager } from "lifi/Interfaces/IFraxHopV2.sol";
+import {
+    IFraxHopV2,
+    IFraxOFT,
+    ITipFeeManager
+} from "lifi/Interfaces/IFraxHopV2.sol";
 
 /// @title IERC20Like
 /// @notice Minimal ERC20 surface used by the Tempo mock hop to pull tokens
@@ -126,23 +130,13 @@ contract MockFraxHopV2Tempo is IFraxHopV2 {
         if (msg.value != 0) revert NativeValueNotAllowed();
 
         address token = IFraxOFT(oft).token();
-        if (
-            !IERC20Like(token).transferFrom(
-                msg.sender,
-                address(this),
-                amountLD
-            )
-        ) revert BridgedTokenPullFailed();
+        if (!IERC20Like(token)
+                .transferFrom(msg.sender, address(this), amountLD)) revert BridgedTokenPullFailed();
         lastAmountPulled = amountLD;
 
         if (feePull != 0) {
-            if (
-                !IERC20Like(feeToken).transferFrom(
-                    msg.sender,
-                    address(this),
-                    feePull
-                )
-            ) revert FeeTokenPullFailed();
+            if (!IERC20Like(feeToken)
+                    .transferFrom(msg.sender, address(this), feePull)) revert FeeTokenPullFailed();
         }
     }
 }

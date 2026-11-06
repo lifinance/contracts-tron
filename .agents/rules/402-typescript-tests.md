@@ -44,7 +44,7 @@ cores, so the guard and the withholding widen together. Consequences:
   test, or a child whose `cwd` holds no `.env` — annotate it with a trailing
   `// spawn-env: <reason>` comment on the statement's own line, and keep that
   statement standalone: the marker only counts on the line its statement ends
-  on, and prettier relocates a trailing comment when the unset is the unbraced
+  on, and the formatter relocates a trailing comment when the unset is the unbraced
   body of an `if`/`else`, which silently detaches it. Brace the branch. Widening
   the cores past the signing keys cost two markers across the whole tree, so a
   wider core is not the marker tax it looks like.

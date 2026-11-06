@@ -58,26 +58,19 @@ contract ScriptBase is Script, DSTest {
     ) internal view returns (address predicted) {
         predicted = IContractDeployer(DEPLOYER_SYSTEM_CONTRACT)
             .getNewAddressCreate2(
-                ZKSYNC_CREATE2_FACTORY,
-                _bytecodeHash,
-                _salt,
-                _constructorInput
+                ZKSYNC_CREATE2_FACTORY, _bytecodeHash, _salt, _constructorInput
             );
     }
 
     /// @notice Reads the zkSync bytecode hash from a compiled contract's zkout JSON
     /// @param _contractName The contract name (e.g., "WhitelistManagerFacet")
     /// @return bytecodeHash The zkSync bytecode hash
-    function getZkSyncBytecodeHash(
-        string memory _contractName
-    ) internal returns (bytes32 bytecodeHash) {
+    function getZkSyncBytecodeHash(string memory _contractName)
+        internal
+        returns (bytes32 bytecodeHash)
+    {
         string memory path = string.concat(
-            root,
-            "/zkout/",
-            _contractName,
-            ".sol/",
-            _contractName,
-            ".json"
+            root, "/zkout/", _contractName, ".sol/", _contractName, ".json"
         );
         string memory jsonFile = vm.readFile(path);
         bytecodeHash = jsonFile.readBytes32(".hash");
@@ -119,9 +112,7 @@ contract ScriptBase is Script, DSTest {
 
         // check if address contains code
         if (!LibAsset.isContract(contractAddress)) {
-            revert(
-                string.concat(key, " in file ", path, " is not a contract")
-            );
+            revert(string.concat(key, " in file ", path, " is not a contract"));
         }
     }
 

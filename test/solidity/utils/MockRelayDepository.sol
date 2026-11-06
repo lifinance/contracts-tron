@@ -14,9 +14,7 @@ contract MockRelayDepository is IRelayDepository {
     error MockRevert();
 
     event DepositNative(
-        address indexed depositor,
-        bytes32 indexed id,
-        uint256 amount
+        address indexed depositor, bytes32 indexed id, uint256 amount
     );
     event DepositErc20(
         address indexed depositor,

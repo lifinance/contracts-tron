@@ -33,10 +33,23 @@ const ALLOWED_TOP_LEVEL = new Set([
   'rpc_endpoints',
   'etherscan',
   'lint',
+  'fmt',
   'external',
 ])
 
 const ALLOWED_ETHERSCAN_KEYS = new Set(['key', 'url', 'chain', 'verifier'])
+
+/** The `[fmt]` keys `main` has used; forge fmt reads them, `forge build` does not. */
+const ALLOWED_FMT_KEYS = new Set([
+  'line_length',
+  'tab_width',
+  'quote_style',
+  'bracket_spacing',
+  'int_types',
+  'number_underscore',
+  'multiline_func_header',
+  'ignore',
+])
 
 const ALLOWED_PROFILE_KEYS = new Set([
   'auto_detect_solc',
@@ -121,7 +134,7 @@ const vetSections = (
   const refuse = (where: string): void => {
     problems.push(`${where} is not a value the rebuild allows`)
   }
-  const { lint, external, rpc_endpoints: rpc, etherscan } = doc
+  const { lint, fmt, external, rpc_endpoints: rpc, etherscan } = doc
 
   if (lint !== undefined) {
     if (!isTable(lint)) refuse('lint')
@@ -129,6 +142,21 @@ const vetSections = (
       for (const [key, value] of Object.entries(lint))
         if (key !== 'lint_on_build' || typeof value !== 'boolean')
           refuse(`lint.${key}`)
+  }
+
+  if (fmt !== undefined) {
+    if (!isTable(fmt)) refuse('fmt')
+    else
+      for (const [key, value] of Object.entries(fmt)) {
+        const scalar =
+          typeof value === 'string' ||
+          typeof value === 'number' ||
+          typeof value === 'boolean'
+        const strings =
+          Array.isArray(value) && value.every((v) => typeof v === 'string')
+        if (!ALLOWED_FMT_KEYS.has(key) || !(scalar || strings))
+          refuse(`fmt.${key}`)
+      }
   }
 
   if (external !== undefined) {

@@ -4,5 +4,5 @@
 
 Post-edit hooks in `.agents/hooks/` run automatically after every Write/Edit:
 
-- `post-edit-format.sh` — prettier on `.sol`/`.ts`/`.js` (silent, always runs)
+- `post-edit-format.sh` — oxfmt on `.ts`/`.js`, `forge fmt` on `.sol` (silent, always runs)
 - `post-edit-validate.sh` — solhint / typecheck-files.sh / bash -n (reports errors back to Claude)
