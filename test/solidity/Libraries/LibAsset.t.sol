@@ -4,7 +4,11 @@ pragma solidity ^0.8.17;
 import { TestBaseLocal } from "../utils/TestBaseLocal.sol";
 import { LibAsset } from "lifi/Libraries/LibAsset.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import { InvalidReceiver, NullAddrIsNotAValidSpender, InvalidAmount } from "lifi/Errors/GenericErrors.sol";
+import {
+    InvalidReceiver,
+    NullAddrIsNotAValidSpender,
+    InvalidAmount
+} from "lifi/Errors/GenericErrors.sol";
 import { MockTronUSDT } from "../utils/MockTronUSDT.sol";
 
 contract LibAssetImplementer {
@@ -32,10 +36,7 @@ contract LibAssetImplementer {
         uint256 setAllowanceTo
     ) public {
         LibAsset.approveERC20(
-            IERC20(assetId),
-            spender,
-            requiredAllowance,
-            setAllowanceTo
+            IERC20(assetId), spender, requiredAllowance, setAllowanceTo
         );
     }
 
@@ -68,10 +69,7 @@ contract LibAssetTest is TestBaseLocal {
         vm.expectRevert(NullAddrIsNotAValidSpender.selector);
 
         implementer.approveERC20(
-            ADDRESS_USDC,
-            address(0),
-            defaultUSDCAmount,
-            type(uint256).max
+            ADDRESS_USDC, address(0), defaultUSDCAmount, type(uint256).max
         );
     }
 
@@ -84,9 +82,7 @@ contract LibAssetTest is TestBaseLocal {
         vm.expectRevert(InvalidReceiver.selector);
 
         implementer.transferAsset(
-            ADDRESS_USDC,
-            payable(address(0)),
-            defaultUSDCAmount
+            ADDRESS_USDC, payable(address(0)), defaultUSDCAmount
         );
     }
 
@@ -94,9 +90,7 @@ contract LibAssetTest is TestBaseLocal {
         vm.expectRevert(InvalidReceiver.selector);
 
         implementer.transferAsset(
-            address(0),
-            payable(address(0)),
-            defaultUSDCAmount
+            address(0), payable(address(0)), defaultUSDCAmount
         );
     }
 
@@ -104,10 +98,7 @@ contract LibAssetTest is TestBaseLocal {
         vm.expectRevert(InvalidReceiver.selector);
 
         implementer.transferFromERC20(
-            ADDRESS_USDC,
-            USER_SENDER,
-            payable(address(0)),
-            defaultUSDCAmount
+            ADDRESS_USDC, USER_SENDER, payable(address(0)), defaultUSDCAmount
         );
     }
 
@@ -165,9 +156,8 @@ contract LibAssetTest is TestBaseLocal {
     function test_isContractWithDelegationDesignator() public {
         // use a real EIP-7702 delegation (designator 0xef0100 ++ delegate
         // address, attached via cheatcode) instead of hand-etching the code
-        (address delegatedEoa, uint256 delegatedEoaKey) = makeAddrAndKey(
-            "delegatedEoa"
-        );
+        (address delegatedEoa, uint256 delegatedEoaKey) =
+            makeAddrAndKey("delegatedEoa");
 
         vm.signAndAttachDelegation(address(implementer), delegatedEoaKey);
 

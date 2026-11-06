@@ -1,8 +1,6 @@
 {
   "schema": 1,
-  "coveredProfiles": [
-    "default"
-  ],
+  "coveredProfiles": ["default"],
   "entries": [
     {
       "key": {

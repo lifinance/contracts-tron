@@ -3,7 +3,13 @@ pragma solidity ^0.8.17;
 
 import { TestBase } from "../utils/TestBase.sol";
 import { FeeForwarder } from "lifi/Periphery/FeeForwarder.sol";
-import { InvalidConfig, InvalidReceiver, NullAddrIsNotAnERC20Token, ETHTransferFailed, InsufficientBalance } from "lifi/Errors/GenericErrors.sol";
+import {
+    InvalidConfig,
+    InvalidReceiver,
+    NullAddrIsNotAnERC20Token,
+    ETHTransferFailed,
+    InsufficientBalance
+} from "lifi/Errors/GenericErrors.sol";
 
 contract FeeForwarderTest is TestBase {
     FeeForwarder private feeForwarder;
@@ -23,8 +29,7 @@ contract FeeForwarderTest is TestBase {
     uint256 internal constant AMOUNT_NATIVE_LARGE = 0.8 ether;
 
     event FeesForwarded(
-        address indexed token,
-        FeeForwarder.FeeDistribution[] distributions
+        address indexed token, FeeForwarder.FeeDistribution[] distributions
     );
 
     function setUp() public {
@@ -49,7 +54,7 @@ contract FeeForwarderTest is TestBase {
     }
 
     // Needed to receive ETH
-    receive() external payable {}
+    receive() external payable { }
 
     function test_ConstructorWithValidOwner() public {
         // Arrange
@@ -70,15 +75,13 @@ contract FeeForwarderTest is TestBase {
 
     function test_ForwardERC20FeesTransfersAllDistributions() public {
         // Arrange
-        FeeForwarder.FeeDistribution[]
-            memory distributions = new FeeForwarder.FeeDistribution[](2);
+        FeeForwarder.FeeDistribution[] memory distributions =
+            new FeeForwarder.FeeDistribution[](2);
         distributions[0] = FeeForwarder.FeeDistribution({
-            recipient: USER_RECEIVER,
-            amount: amountERC20Small
+            recipient: USER_RECEIVER, amount: amountERC20Small
         }); // 1 USDC
         distributions[1] = FeeForwarder.FeeDistribution({
-            recipient: USER_REFUND,
-            amount: amountERC20Medium
+            recipient: USER_REFUND, amount: amountERC20Medium
         }); // 0.5 USDC
 
         uint256 total = distributions[0].amount + distributions[1].amount;
@@ -101,11 +104,10 @@ contract FeeForwarderTest is TestBase {
 
     function test_ForwardERC20FeesWithSingleDistribution() public {
         // Arrange
-        FeeForwarder.FeeDistribution[]
-            memory distributions = new FeeForwarder.FeeDistribution[](1);
+        FeeForwarder.FeeDistribution[] memory distributions =
+            new FeeForwarder.FeeDistribution[](1);
         distributions[0] = FeeForwarder.FeeDistribution({
-            recipient: USER_RECEIVER,
-            amount: amountERC20Large
+            recipient: USER_RECEIVER, amount: amountERC20Large
         }); // 2.5 USDC
 
         // Act & Assert
@@ -120,15 +122,14 @@ contract FeeForwarderTest is TestBase {
 
         assertEq(usdc.balanceOf(USER_RECEIVER), amountERC20Large); // 2.5 USDC
         assertEq(
-            usdc.balanceOf(USER_SENDER),
-            initialTokenBalance - amountERC20Large
+            usdc.balanceOf(USER_SENDER), initialTokenBalance - amountERC20Large
         ); // 2.5 USDC
     }
 
     function test_ForwardERC20FeesWithEmptyDistributions() public {
         // Arrange
-        FeeForwarder.FeeDistribution[]
-            memory distributions = new FeeForwarder.FeeDistribution[](0);
+        FeeForwarder.FeeDistribution[] memory distributions =
+            new FeeForwarder.FeeDistribution[](0);
 
         // Act & Assert - Empty arrays should not revert but will still emit events
         vm.startPrank(USER_SENDER);
@@ -147,19 +148,16 @@ contract FeeForwarderTest is TestBase {
         public
     {
         // Arrange
-        FeeForwarder.FeeDistribution[]
-            memory distributions = new FeeForwarder.FeeDistribution[](3);
+        FeeForwarder.FeeDistribution[] memory distributions =
+            new FeeForwarder.FeeDistribution[](3);
         distributions[0] = FeeForwarder.FeeDistribution({
-            recipient: USER_RECEIVER,
-            amount: amountERC20Small
+            recipient: USER_RECEIVER, amount: amountERC20Small
         }); // 1 USDC
         distributions[1] = FeeForwarder.FeeDistribution({
-            recipient: USER_REFUND,
-            amount: 0
+            recipient: USER_REFUND, amount: 0
         }); // 0 USDC
         distributions[2] = FeeForwarder.FeeDistribution({
-            recipient: USER_PAUSER,
-            amount: amountERC20Medium
+            recipient: USER_PAUSER, amount: amountERC20Medium
         }); // 0.5 USDC
 
         uint256 total = amountERC20Small + amountERC20Medium; // Only non-zero amounts
@@ -186,15 +184,13 @@ contract FeeForwarderTest is TestBase {
         public
     {
         // Arrange
-        FeeForwarder.FeeDistribution[]
-            memory distributions = new FeeForwarder.FeeDistribution[](2);
+        FeeForwarder.FeeDistribution[] memory distributions =
+            new FeeForwarder.FeeDistribution[](2);
         distributions[0] = FeeForwarder.FeeDistribution({
-            recipient: USER_RECEIVER,
-            amount: AMOUNT_NATIVE_LARGE
+            recipient: USER_RECEIVER, amount: AMOUNT_NATIVE_LARGE
         }); // 0.8 ether
         distributions[1] = FeeForwarder.FeeDistribution({
-            recipient: USER_PAUSER,
-            amount: AMOUNT_NATIVE_MEDIUM
+            recipient: USER_PAUSER, amount: AMOUNT_NATIVE_MEDIUM
         }); // 0.5 ether
 
         uint256 total = distributions[0].amount + distributions[1].amount;
@@ -211,23 +207,20 @@ contract FeeForwarderTest is TestBase {
         vm.stopPrank();
 
         assertEq(
-            USER_RECEIVER.balance,
-            RECIPIENT_ETH_BALANCE + AMOUNT_NATIVE_LARGE
+            USER_RECEIVER.balance, RECIPIENT_ETH_BALANCE + AMOUNT_NATIVE_LARGE
         ); // 0.8 ether
         assertEq(
-            USER_PAUSER.balance,
-            RECIPIENT_ETH_BALANCE + AMOUNT_NATIVE_MEDIUM
+            USER_PAUSER.balance, RECIPIENT_ETH_BALANCE + AMOUNT_NATIVE_MEDIUM
         ); // 0.5 ether
         assertEq(USER_SENDER.balance, balanceBefore - total);
     }
 
     function test_ForwardNativeFeesExactValueUsesEntireMsgValue() public {
         // Arrange
-        FeeForwarder.FeeDistribution[]
-            memory distributions = new FeeForwarder.FeeDistribution[](1);
+        FeeForwarder.FeeDistribution[] memory distributions =
+            new FeeForwarder.FeeDistribution[](1);
         distributions[0] = FeeForwarder.FeeDistribution({
-            recipient: USER_REFUND,
-            amount: AMOUNT_NATIVE_LARGE
+            recipient: USER_REFUND, amount: AMOUNT_NATIVE_LARGE
         }); // 0.8 ether
 
         // Act & Assert
@@ -242,15 +235,14 @@ contract FeeForwarderTest is TestBase {
         vm.stopPrank();
 
         assertEq(
-            USER_REFUND.balance,
-            RECIPIENT_ETH_BALANCE + AMOUNT_NATIVE_LARGE
+            USER_REFUND.balance, RECIPIENT_ETH_BALANCE + AMOUNT_NATIVE_LARGE
         ); // 0.8 ether
     }
 
     function test_ForwardNativeFeesWithEmptyDistributions() public {
         // Arrange
-        FeeForwarder.FeeDistribution[]
-            memory distributions = new FeeForwarder.FeeDistribution[](0);
+        FeeForwarder.FeeDistribution[] memory distributions =
+            new FeeForwarder.FeeDistribution[](0);
         uint256 balanceBefore = USER_SENDER.balance;
 
         // Act & Assert - Empty arrays should not revert but will still emit events
@@ -270,19 +262,16 @@ contract FeeForwarderTest is TestBase {
         public
     {
         // Arrange
-        FeeForwarder.FeeDistribution[]
-            memory distributions = new FeeForwarder.FeeDistribution[](3);
+        FeeForwarder.FeeDistribution[] memory distributions =
+            new FeeForwarder.FeeDistribution[](3);
         distributions[0] = FeeForwarder.FeeDistribution({
-            recipient: USER_RECEIVER,
-            amount: AMOUNT_NATIVE_SMALL
+            recipient: USER_RECEIVER, amount: AMOUNT_NATIVE_SMALL
         }); // 0.1 ether
         distributions[1] = FeeForwarder.FeeDistribution({
-            recipient: USER_REFUND,
-            amount: 0
+            recipient: USER_REFUND, amount: 0
         }); // 0 ether
         distributions[2] = FeeForwarder.FeeDistribution({
-            recipient: USER_PAUSER,
-            amount: AMOUNT_NATIVE_MEDIUM
+            recipient: USER_PAUSER, amount: AMOUNT_NATIVE_MEDIUM
         }); // 0.5 ether
 
         uint256 total = AMOUNT_NATIVE_SMALL + AMOUNT_NATIVE_MEDIUM; // Only non-zero amounts
@@ -300,37 +289,31 @@ contract FeeForwarderTest is TestBase {
 
         // Verify only non-zero amounts were transferred
         assertEq(
-            USER_RECEIVER.balance,
-            RECIPIENT_ETH_BALANCE + AMOUNT_NATIVE_SMALL
+            USER_RECEIVER.balance, RECIPIENT_ETH_BALANCE + AMOUNT_NATIVE_SMALL
         ); // 0.1 ether
         assertEq(USER_REFUND.balance, RECIPIENT_ETH_BALANCE); // 0 ether (no change)
         assertEq(
-            USER_PAUSER.balance,
-            RECIPIENT_ETH_BALANCE + AMOUNT_NATIVE_MEDIUM
+            USER_PAUSER.balance, RECIPIENT_ETH_BALANCE + AMOUNT_NATIVE_MEDIUM
         ); // 0.5 ether
         assertEq(USER_SENDER.balance, balanceBefore - total);
     }
 
     function test_ForwardNativeFeesWithMultipleDistributions() public {
         // Arrange
-        FeeForwarder.FeeDistribution[]
-            memory distributions = new FeeForwarder.FeeDistribution[](3);
+        FeeForwarder.FeeDistribution[] memory distributions =
+            new FeeForwarder.FeeDistribution[](3);
         distributions[0] = FeeForwarder.FeeDistribution({
-            recipient: USER_RECEIVER,
-            amount: AMOUNT_NATIVE_SMALL
+            recipient: USER_RECEIVER, amount: AMOUNT_NATIVE_SMALL
         }); // 0.1 ether
         distributions[1] = FeeForwarder.FeeDistribution({
-            recipient: USER_REFUND,
-            amount: AMOUNT_NATIVE_MEDIUM
+            recipient: USER_REFUND, amount: AMOUNT_NATIVE_MEDIUM
         }); // 0.5 ether
         distributions[2] = FeeForwarder.FeeDistribution({
-            recipient: USER_PAUSER,
-            amount: AMOUNT_NATIVE_LARGE
+            recipient: USER_PAUSER, amount: AMOUNT_NATIVE_LARGE
         }); // 0.8 ether
 
-        uint256 total = distributions[0].amount +
-            distributions[1].amount +
-            distributions[2].amount;
+        uint256 total = distributions[0].amount + distributions[1].amount
+            + distributions[2].amount;
         uint256 valueSent = total + AMOUNT_NATIVE_SMALL; // Extra for remainder
         uint256 balanceBefore = USER_SENDER.balance;
 
@@ -344,27 +327,23 @@ contract FeeForwarderTest is TestBase {
         vm.stopPrank();
 
         assertEq(
-            USER_RECEIVER.balance,
-            RECIPIENT_ETH_BALANCE + AMOUNT_NATIVE_SMALL
+            USER_RECEIVER.balance, RECIPIENT_ETH_BALANCE + AMOUNT_NATIVE_SMALL
         ); // 0.1 ether
         assertEq(
-            USER_REFUND.balance,
-            RECIPIENT_ETH_BALANCE + AMOUNT_NATIVE_MEDIUM
+            USER_REFUND.balance, RECIPIENT_ETH_BALANCE + AMOUNT_NATIVE_MEDIUM
         ); // 0.5 ether
         assertEq(
-            USER_PAUSER.balance,
-            RECIPIENT_ETH_BALANCE + AMOUNT_NATIVE_LARGE
+            USER_PAUSER.balance, RECIPIENT_ETH_BALANCE + AMOUNT_NATIVE_LARGE
         ); // 0.8 ether
         assertEq(USER_SENDER.balance, balanceBefore - total);
     }
 
     function testRevert_ForwardNativeFeesInsufficientValue() public {
         // Arrange
-        FeeForwarder.FeeDistribution[]
-            memory distributions = new FeeForwarder.FeeDistribution[](1);
+        FeeForwarder.FeeDistribution[] memory distributions =
+            new FeeForwarder.FeeDistribution[](1);
         distributions[0] = FeeForwarder.FeeDistribution({
-            recipient: USER_REFUND,
-            amount: 1 ether
+            recipient: USER_REFUND, amount: 1 ether
         });
 
         // Act & Assert - Transaction will revert due to insufficient funds when trying to transfer ETH
@@ -379,11 +358,10 @@ contract FeeForwarderTest is TestBase {
 
     function testRevert_ForwardERC20FeesWhenNativeTokenProvided() public {
         // Arrange
-        FeeForwarder.FeeDistribution[]
-            memory distributions = new FeeForwarder.FeeDistribution[](1);
+        FeeForwarder.FeeDistribution[] memory distributions =
+            new FeeForwarder.FeeDistribution[](1);
         distributions[0] = FeeForwarder.FeeDistribution({
-            recipient: USER_REFUND,
-            amount: amountERC20Small
+            recipient: USER_REFUND, amount: amountERC20Small
         }); // 1 USDC
 
         // Act & Assert - Native token transfers will fail naturally when trying to transfer, saving gas
@@ -396,11 +374,10 @@ contract FeeForwarderTest is TestBase {
 
     function test_ForwardERC20FeesWithZeroAmount() public {
         // Arrange
-        FeeForwarder.FeeDistribution[]
-            memory distributions = new FeeForwarder.FeeDistribution[](1);
+        FeeForwarder.FeeDistribution[] memory distributions =
+            new FeeForwarder.FeeDistribution[](1);
         distributions[0] = FeeForwarder.FeeDistribution({
-            recipient: USER_RECEIVER,
-            amount: 0
+            recipient: USER_RECEIVER, amount: 0
         }); // 0 USDC
 
         uint256 balanceBefore = usdc.balanceOf(USER_RECEIVER);
@@ -417,11 +394,10 @@ contract FeeForwarderTest is TestBase {
 
     function test_ForwardNativeFeesWithZeroAmount() public {
         // Arrange
-        FeeForwarder.FeeDistribution[]
-            memory distributions = new FeeForwarder.FeeDistribution[](1);
+        FeeForwarder.FeeDistribution[] memory distributions =
+            new FeeForwarder.FeeDistribution[](1);
         distributions[0] = FeeForwarder.FeeDistribution({
-            recipient: USER_RECEIVER,
-            amount: 0
+            recipient: USER_RECEIVER, amount: 0
         });
 
         uint256 balanceBefore = USER_RECEIVER.balance;
@@ -441,11 +417,10 @@ contract FeeForwarderTest is TestBase {
 
     function testRevert_ForwardERC20FeesWithZeroRecipient() public {
         // Arrange
-        FeeForwarder.FeeDistribution[]
-            memory distributions = new FeeForwarder.FeeDistribution[](1);
+        FeeForwarder.FeeDistribution[] memory distributions =
+            new FeeForwarder.FeeDistribution[](1);
         distributions[0] = FeeForwarder.FeeDistribution({
-            recipient: address(0),
-            amount: amountERC20Small
+            recipient: address(0), amount: amountERC20Small
         }); // 1 USDC
 
         // Act & Assert
@@ -458,11 +433,10 @@ contract FeeForwarderTest is TestBase {
 
     function testRevert_ForwardNativeFeesWithZeroRecipient() public {
         // Arrange
-        FeeForwarder.FeeDistribution[]
-            memory distributions = new FeeForwarder.FeeDistribution[](1);
+        FeeForwarder.FeeDistribution[] memory distributions =
+            new FeeForwarder.FeeDistribution[](1);
         distributions[0] = FeeForwarder.FeeDistribution({
-            recipient: address(0),
-            amount: 1 ether
+            recipient: address(0), amount: 1 ether
         });
 
         // Act & Assert
@@ -475,15 +449,13 @@ contract FeeForwarderTest is TestBase {
 
     function test_ForwardNativeFeesWithExactRemainder() public {
         // Arrange
-        FeeForwarder.FeeDistribution[]
-            memory distributions = new FeeForwarder.FeeDistribution[](2);
+        FeeForwarder.FeeDistribution[] memory distributions =
+            new FeeForwarder.FeeDistribution[](2);
         distributions[0] = FeeForwarder.FeeDistribution({
-            recipient: USER_RECEIVER,
-            amount: AMOUNT_NATIVE_SMALL
+            recipient: USER_RECEIVER, amount: AMOUNT_NATIVE_SMALL
         }); // 0.1 ether
         distributions[1] = FeeForwarder.FeeDistribution({
-            recipient: USER_REFUND,
-            amount: AMOUNT_NATIVE_MEDIUM
+            recipient: USER_REFUND, amount: AMOUNT_NATIVE_MEDIUM
         }); // 0.5 ether
 
         uint256 total = AMOUNT_NATIVE_SMALL + AMOUNT_NATIVE_MEDIUM; // 0.6 ether
@@ -499,23 +471,20 @@ contract FeeForwarderTest is TestBase {
         vm.stopPrank();
 
         assertEq(
-            USER_RECEIVER.balance,
-            RECIPIENT_ETH_BALANCE + AMOUNT_NATIVE_SMALL
+            USER_RECEIVER.balance, RECIPIENT_ETH_BALANCE + AMOUNT_NATIVE_SMALL
         ); // 0.1 ether
         assertEq(
-            USER_REFUND.balance,
-            RECIPIENT_ETH_BALANCE + AMOUNT_NATIVE_MEDIUM
+            USER_REFUND.balance, RECIPIENT_ETH_BALANCE + AMOUNT_NATIVE_MEDIUM
         ); // 0.5 ether
         assertEq(USER_SENDER.balance, balanceBefore - total);
     }
 
     function test_ForwardNativeFeesWithLargeRemainder() public {
         // Arrange
-        FeeForwarder.FeeDistribution[]
-            memory distributions = new FeeForwarder.FeeDistribution[](1);
+        FeeForwarder.FeeDistribution[] memory distributions =
+            new FeeForwarder.FeeDistribution[](1);
         distributions[0] = FeeForwarder.FeeDistribution({
-            recipient: USER_RECEIVER,
-            amount: AMOUNT_NATIVE_SMALL
+            recipient: USER_RECEIVER, amount: AMOUNT_NATIVE_SMALL
         }); // 0.1 ether
 
         uint256 valueSent = 5 ether; // Much larger than needed
@@ -531,19 +500,17 @@ contract FeeForwarderTest is TestBase {
         vm.stopPrank();
 
         assertEq(
-            USER_RECEIVER.balance,
-            RECIPIENT_ETH_BALANCE + AMOUNT_NATIVE_SMALL
+            USER_RECEIVER.balance, RECIPIENT_ETH_BALANCE + AMOUNT_NATIVE_SMALL
         ); // 0.1 ether
         assertEq(USER_SENDER.balance, balanceBefore - AMOUNT_NATIVE_SMALL); // Only 0.1 ether used
     }
 
     function test_ForwardERC20FeesWithLargeDistribution() public {
         // Arrange
-        FeeForwarder.FeeDistribution[]
-            memory distributions = new FeeForwarder.FeeDistribution[](1);
+        FeeForwarder.FeeDistribution[] memory distributions =
+            new FeeForwarder.FeeDistribution[](1);
         distributions[0] = FeeForwarder.FeeDistribution({
-            recipient: USER_RECEIVER,
-            amount: 500 * 10 ** usdc.decimals()
+            recipient: USER_RECEIVER, amount: 500 * 10 ** usdc.decimals()
         }); // 500 USDC
 
         // Act & Assert
@@ -565,15 +532,13 @@ contract FeeForwarderTest is TestBase {
 
     function test_ForwardNativeFeesWithAdvancedEventVerification() public {
         // Arrange
-        FeeForwarder.FeeDistribution[]
-            memory distributions = new FeeForwarder.FeeDistribution[](2);
+        FeeForwarder.FeeDistribution[] memory distributions =
+            new FeeForwarder.FeeDistribution[](2);
         distributions[0] = FeeForwarder.FeeDistribution({
-            recipient: USER_RECEIVER,
-            amount: AMOUNT_NATIVE_MEDIUM
+            recipient: USER_RECEIVER, amount: AMOUNT_NATIVE_MEDIUM
         }); // 0.5 ether
         distributions[1] = FeeForwarder.FeeDistribution({
-            recipient: USER_REFUND,
-            amount: AMOUNT_NATIVE_SMALL
+            recipient: USER_REFUND, amount: AMOUNT_NATIVE_SMALL
         }); // 0.1 ether
 
         uint256 total = distributions[0].amount + distributions[1].amount;
@@ -590,12 +555,10 @@ contract FeeForwarderTest is TestBase {
 
         // Verify recipient balances
         assertEq(
-            USER_RECEIVER.balance,
-            RECIPIENT_ETH_BALANCE + AMOUNT_NATIVE_MEDIUM
+            USER_RECEIVER.balance, RECIPIENT_ETH_BALANCE + AMOUNT_NATIVE_MEDIUM
         ); // 0.5 ether
         assertEq(
-            USER_REFUND.balance,
-            RECIPIENT_ETH_BALANCE + AMOUNT_NATIVE_SMALL
+            USER_REFUND.balance, RECIPIENT_ETH_BALANCE + AMOUNT_NATIVE_SMALL
         ); // 0.1 ether
     }
 
@@ -604,11 +567,10 @@ contract FeeForwarderTest is TestBase {
         uint256 strayBalance = 3 ether;
         vm.deal(address(feeForwarder), strayBalance);
 
-        FeeForwarder.FeeDistribution[]
-            memory distributions = new FeeForwarder.FeeDistribution[](1);
+        FeeForwarder.FeeDistribution[] memory distributions =
+            new FeeForwarder.FeeDistribution[](1);
         distributions[0] = FeeForwarder.FeeDistribution({
-            recipient: USER_RECEIVER,
-            amount: AMOUNT_NATIVE_SMALL
+            recipient: USER_RECEIVER, amount: AMOUNT_NATIVE_SMALL
         }); // 0.1 ether
 
         uint256 valueSent = AMOUNT_NATIVE_SMALL + AMOUNT_NATIVE_MEDIUM;
@@ -620,8 +582,7 @@ contract FeeForwarderTest is TestBase {
 
         // Assert - only the unspent part of msg.value comes back, the stray balance stays put
         assertEq(
-            USER_RECEIVER.balance,
-            RECIPIENT_ETH_BALANCE + AMOUNT_NATIVE_SMALL
+            USER_RECEIVER.balance, RECIPIENT_ETH_BALANCE + AMOUNT_NATIVE_SMALL
         ); // 0.1 ether
         assertEq(USER_SENDER.balance, balanceBefore - AMOUNT_NATIVE_SMALL);
         assertEq(address(feeForwarder).balance, strayBalance);
@@ -633,11 +594,10 @@ contract FeeForwarderTest is TestBase {
         // Arrange - a stray balance would cover the shortfall, but the caller did not fund it
         vm.deal(address(feeForwarder), 1 ether);
 
-        FeeForwarder.FeeDistribution[]
-            memory distributions = new FeeForwarder.FeeDistribution[](1);
+        FeeForwarder.FeeDistribution[] memory distributions =
+            new FeeForwarder.FeeDistribution[](1);
         distributions[0] = FeeForwarder.FeeDistribution({
-            recipient: USER_RECEIVER,
-            amount: 1 ether
+            recipient: USER_RECEIVER, amount: 1 ether
         });
 
         // Act & Assert
@@ -645,9 +605,7 @@ contract FeeForwarderTest is TestBase {
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                InsufficientBalance.selector,
-                1 ether,
-                AMOUNT_NATIVE_MEDIUM
+                InsufficientBalance.selector, 1 ether, AMOUNT_NATIVE_MEDIUM
             )
         );
 
@@ -660,9 +618,8 @@ contract FeeForwarderTest is TestBase {
         public
     {
         // Arrange - recipient calls back in and tries to claim everything not yet distributed
-        ReentrantFeeRecipient attacker = new ReentrantFeeRecipient(
-            feeForwarder
-        );
+        ReentrantFeeRecipient attacker =
+            new ReentrantFeeRecipient(feeForwarder);
         uint256 valueSent = 5 ether;
 
         uint256 claimAttempt = valueSent - AMOUNT_NATIVE_SMALL; // 4.9 ether
@@ -672,11 +629,10 @@ contract FeeForwarderTest is TestBase {
             _reentryWithEmptyArray: false
         });
 
-        FeeForwarder.FeeDistribution[]
-            memory distributions = new FeeForwarder.FeeDistribution[](1);
+        FeeForwarder.FeeDistribution[] memory distributions =
+            new FeeForwarder.FeeDistribution[](1);
         distributions[0] = FeeForwarder.FeeDistribution({
-            recipient: address(attacker),
-            amount: AMOUNT_NATIVE_SMALL
+            recipient: address(attacker), amount: AMOUNT_NATIVE_SMALL
         }); // 0.1 ether
 
         uint256 balanceBefore = USER_SENDER.balance;
@@ -692,9 +648,7 @@ contract FeeForwarderTest is TestBase {
         assertEq(
             attacker.reentryRevertData(),
             abi.encodeWithSelector(
-                InsufficientBalance.selector,
-                claimAttempt,
-                0
+                InsufficientBalance.selector, claimAttempt, 0
             )
         );
 
@@ -709,21 +663,17 @@ contract FeeForwarderTest is TestBase {
     {
         // Arrange - the outer invocation still owes a 4.9 ether refund when the callback
         // fires, but the nested call claims nothing: it funds nothing and distributes nothing
-        ReentrantFeeRecipient attacker = new ReentrantFeeRecipient(
-            feeForwarder
-        );
+        ReentrantFeeRecipient attacker =
+            new ReentrantFeeRecipient(feeForwarder);
 
         attacker.arm({
-            _reentryAmount: 0,
-            _reentryValue: 0,
-            _reentryWithEmptyArray: true
+            _reentryAmount: 0, _reentryValue: 0, _reentryWithEmptyArray: true
         });
 
-        FeeForwarder.FeeDistribution[]
-            memory distributions = new FeeForwarder.FeeDistribution[](1);
+        FeeForwarder.FeeDistribution[] memory distributions =
+            new FeeForwarder.FeeDistribution[](1);
         distributions[0] = FeeForwarder.FeeDistribution({
-            recipient: address(attacker),
-            amount: AMOUNT_NATIVE_SMALL
+            recipient: address(attacker), amount: AMOUNT_NATIVE_SMALL
         }); // 0.1 ether
 
         uint256 balanceBefore = USER_SENDER.balance;
@@ -746,9 +696,8 @@ contract FeeForwarderTest is TestBase {
     {
         // Arrange - the same callback, but the nested call distributes value the recipient
         // funded itself, so it is a legitimate invocation rather than a claim on the parent
-        ReentrantFeeRecipient attacker = new ReentrantFeeRecipient(
-            feeForwarder
-        );
+        ReentrantFeeRecipient attacker =
+            new ReentrantFeeRecipient(feeForwarder);
         vm.deal(address(attacker), AMOUNT_NATIVE_MEDIUM);
 
         attacker.arm({
@@ -757,11 +706,10 @@ contract FeeForwarderTest is TestBase {
             _reentryWithEmptyArray: false
         });
 
-        FeeForwarder.FeeDistribution[]
-            memory distributions = new FeeForwarder.FeeDistribution[](1);
+        FeeForwarder.FeeDistribution[] memory distributions =
+            new FeeForwarder.FeeDistribution[](1);
         distributions[0] = FeeForwarder.FeeDistribution({
-            recipient: address(attacker),
-            amount: AMOUNT_NATIVE_SMALL
+            recipient: address(attacker), amount: AMOUNT_NATIVE_SMALL
         }); // 0.1 ether
 
         uint256 balanceBefore = USER_SENDER.balance;
@@ -826,13 +774,13 @@ contract ReentrantFeeRecipient {
         } else {
             distributions = new FeeForwarder.FeeDistribution[](1);
             distributions[0] = FeeForwarder.FeeDistribution({
-                recipient: address(this),
-                amount: reentryAmount
+                recipient: address(this), amount: reentryAmount
             });
         }
 
-        (reentrySucceeded, reentryRevertData) = address(FORWARDER).call{
-            value: reentryValue
-        }(abi.encodeCall(FeeForwarder.forwardNativeFees, (distributions)));
+        (reentrySucceeded, reentryRevertData) = address(FORWARDER)
+        .call{ value: reentryValue }(
+            abi.encodeCall(FeeForwarder.forwardNativeFees, (distributions))
+        );
     }
 }

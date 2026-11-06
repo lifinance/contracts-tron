@@ -7,11 +7,15 @@ import { LiFiDiamond } from "lifi/LiFiDiamond.sol";
 import { DiamondTest } from "../../../utils/DiamondTest.sol";
 import { AcrossV4SwapFacet } from "lifi/Facets/AcrossV4SwapFacet.sol";
 import { ISpokePoolPeriphery } from "lifi/Interfaces/ISpokePoolPeriphery.sol";
-import { ISponsoredCCTPSrcPeriphery } from "lifi/Interfaces/ISponsoredCCTPSrcPeriphery.sol";
+import {
+    ISponsoredCCTPSrcPeriphery
+} from "lifi/Interfaces/ISponsoredCCTPSrcPeriphery.sol";
 import { ILiFi } from "lifi/Interfaces/ILiFi.sol";
 import { LibSwap } from "lifi/Libraries/LibSwap.sol";
 import { InformationMismatch } from "lifi/Errors/GenericErrors.sol";
-import { TestWhitelistManagerBase } from "../../../utils/TestWhitelistManagerBase.sol";
+import {
+    TestWhitelistManagerBase
+} from "../../../utils/TestWhitelistManagerBase.sol";
 import { MockUniswapDEX } from "../../../utils/MockUniswapDEX.sol";
 import { TestToken } from "../../../utils/TestToken.sol";
 
@@ -24,7 +28,7 @@ contract RevertingToken is TestToken {
         string memory _name,
         string memory _symbol,
         uint8 _decimals
-    ) TestToken(_name, _symbol, _decimals) {}
+    ) TestToken(_name, _symbol, _decimals) { }
 
     function setForbiddenSender(address _forbiddenSender) external {
         forbiddenSender = _forbiddenSender;
@@ -34,7 +38,9 @@ contract RevertingToken is TestToken {
         address to,
         uint256 amount
     ) public override returns (bool) {
-        if (msg.sender == forbiddenSender) revert RefundTransferAttempted();
+        if (msg.sender == forbiddenSender) {
+            revert RefundTransferAttempted();
+        }
         return super.transfer(to, amount);
     }
 }
@@ -43,7 +49,7 @@ contract MockSponsoredCctpSrcPeriphery is ISponsoredCCTPSrcPeriphery {
     function depositForBurn(
         SponsoredCCTPQuote calldata,
         bytes calldata
-    ) external override {}
+    ) external override { }
 }
 
 // Minimal stub facet (for Diamond addFacet)
@@ -67,7 +73,7 @@ contract TestAcrossV4SwapFacetRefundOrdering is
             _sponsoredCctpSrcPeriphery,
             _backendSigner
         )
-    {}
+    { }
 }
 
 contract AcrossV4SwapFacetSponsoredRefundOrderingTest is Test, DiamondTest {
@@ -99,21 +105,19 @@ contract AcrossV4SwapFacetSponsoredRefundOrderingTest is Test, DiamondTest {
         cctpToken.setForbiddenSender(address(diamond));
 
         TestAcrossV4SwapFacetRefundOrdering facetImpl = new TestAcrossV4SwapFacetRefundOrdering(
-                ISpokePoolPeriphery(address(0)),
-                address(0xBEEF), // required non-zero
-                address(0xB0B), // required non-zero wrapped native
-                address(0),
-                address(cctpPeriphery),
-                address(0xCAFE) // required non-zero
-            );
+            ISpokePoolPeriphery(address(0)),
+            address(0xBEEF), // required non-zero
+            address(0xB0B), // required non-zero wrapped native
+            address(0),
+            address(cctpPeriphery),
+            address(0xCAFE) // required non-zero
+        );
 
         bytes4[] memory functionSelectors = new bytes4[](3);
-        functionSelectors[0] = facetImpl
-            .startBridgeTokensViaAcrossV4Swap
-            .selector;
-        functionSelectors[1] = facetImpl
-            .swapAndStartBridgeTokensViaAcrossV4Swap
-            .selector;
+        functionSelectors[0] =
+        facetImpl.startBridgeTokensViaAcrossV4Swap.selector;
+        functionSelectors[1] =
+        facetImpl.swapAndStartBridgeTokensViaAcrossV4Swap.selector;
         functionSelectors[2] = facetImpl.addAllowedContractSelector.selector;
         addFacet(diamond, address(facetImpl), functionSelectors);
 
@@ -122,8 +126,7 @@ contract AcrossV4SwapFacetSponsoredRefundOrderingTest is Test, DiamondTest {
         // allow swapExactTokensForTokens on the mock DEX
         TestAcrossV4SwapFacetRefundOrdering(address(diamond))
             .addAllowedContractSelector(
-                address(dex),
-                MockUniswapDEX.swapExactTokensForTokens.selector
+                address(dex), MockUniswapDEX.swapExactTokensForTokens.selector
             );
     }
 
@@ -167,19 +170,15 @@ contract AcrossV4SwapFacetSponsoredRefundOrderingTest is Test, DiamondTest {
 
         // Positive slippage: swap outputs quotedAmount + 1.
         uint256 swapOutput = quote.amount + 1;
-        LibSwap.SwapData[] memory swapData = _swapDataDaiToToken(
-            address(cctpToken),
-            swapOutput
-        );
+        LibSwap.SwapData[] memory swapData =
+            _swapDataDaiToToken(address(cctpToken), swapOutput);
 
         // Fund user + dex.
         dai.mint(USER_SENDER, swapData[0].fromAmount);
         cctpToken.mint(address(dex), swapOutput);
 
         dex.setSwapOutput(
-            swapData[0].fromAmount,
-            ERC20(address(cctpToken)),
-            swapOutput
+            swapData[0].fromAmount, ERC20(address(cctpToken)), swapOutput
         );
 
         ILiFi.BridgeData memory bridgeData = ILiFi.BridgeData({
@@ -196,9 +195,8 @@ contract AcrossV4SwapFacetSponsoredRefundOrderingTest is Test, DiamondTest {
         });
 
         AcrossV4SwapFacet.AcrossV4SwapFacetData memory facetData;
-        facetData.swapApiTarget = AcrossV4SwapFacet
-            .SwapApiTarget
-            .SponsoredCCTPSrcPeriphery;
+        facetData.swapApiTarget =
+        AcrossV4SwapFacet.SwapApiTarget.SponsoredCCTPSrcPeriphery;
         facetData.callData = abi.encode(quote, bytes(""), USER_SENDER);
         facetData.signature = "";
 
@@ -210,9 +208,7 @@ contract AcrossV4SwapFacetSponsoredRefundOrderingTest is Test, DiamondTest {
         vm.expectRevert(InformationMismatch.selector);
 
         facet.swapAndStartBridgeTokensViaAcrossV4Swap(
-            bridgeData,
-            swapData,
-            facetData
+            bridgeData, swapData, facetData
         );
         vm.stopPrank();
     }
