@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# PostToolUse hook: auto-format edited file with oxfmt / forge fmt (silent)
-# Triggered on: Write, Edit, MultiEdit
+# Auto-format the edited file with oxfmt / forge fmt (silent). Called by post-edit-validate.sh before
+# it lints, so formatting never races the linters.
 # Reads tool JSON from stdin; exits 0 always (never blocks Claude)
 
 INPUT=$(cat)

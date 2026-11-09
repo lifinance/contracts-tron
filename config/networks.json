@@ -427,7 +427,7 @@
     "nativeAddress": "0x0000000000000000000000000000000000000000",
     "nativeCurrency": "G",
     "wrappedNativeAddress": "0xBB859E225ac8Fb6BE1C7e38D87b767e95Fef0EbD",
-    "status": "active",
+    "status": "inactive",
     "type": "mainnet",
     "rpcUrl": "https://rpc.ankr.com/gravity",
     "verificationType": "oklink",
@@ -696,7 +696,7 @@
     "safeAddress": "0x1f1b30aD821634FEdCFFf90450faE05663Fd2E07",
     "gasZipChainId": 30,
     "isZkEVM": false,
-    "targetEvmVersion": "cancun",
+    "targetEvmVersion": "london",
     "create3Factory": "0x763f212f355433C59d734C71247d16fCE74D8785",
     "customVerificationFlags": {
       "-e": "verifyContract"
