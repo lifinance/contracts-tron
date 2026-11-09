@@ -71,7 +71,7 @@ export const TARGET_STATE_VERSION_LATEST = 'latest'
 const SOURCE_DIRS = ['src', 'src/Facets', 'src/Periphery', 'src/Security']
 
 /** Solidity-style contract name, so a read stays inside `src/`. */
-const CONTRACT_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
+export const CONTRACT_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 /** `network → environment → diamond → contract → version`, as `main` declares it. */
 export type PinnedTargetState = Record<
@@ -342,8 +342,8 @@ export const describeTargetStateUnavailable = (
  *
  * R4.6 is graded per case, not as a single equality: an upgrade of a facet `main`
  * already targets is the mechanical anchor and a downgrade there refuses, while a
- * first-time add has no entry on `main` by construction — the target-state PR
- * merges only after execution — so it is labeled and allowed. Grading absence as
+ * first-time add has no entry on `main` by construction — `/finish-rollout` adds
+ * it to the rollout PR only after execution — so it is labeled and allowed. Grading absence as
  * a "no" would refuse every honest new-chain rollout.
  * @param calldatas - the proposal's calls, in the order they were passed
  * @param network - network the proposal targets
@@ -483,7 +483,7 @@ export const evaluateTargetStateIntent = async (
         mainVersion: null,
         crossFleetCount: countNetworksDeclaring(read.state, contractName),
         status: 'not-previously-targeted',
-        detail: `${contractName} is not declared for ${network} in ${PINNED_REF} — expected for a first deployment, since the target-state update merges only after execution. Intent rests on the linked ticket and PR.`,
+        detail: `${contractName} is not declared for ${network} in ${PINNED_REF} — expected for a first deployment, since /finish-rollout adds the target-state entry only after execution. Intent rests on the linked ticket and PR.`,
       })
       continue
     }
@@ -592,22 +592,23 @@ export const PINNED_GIT_TIMEOUT_MS = 60_000
 const execFileAsync = promisify(execFile)
 
 /**
- * The git reads the pinned anchor is taken through, run off the event loop so
- * the signer's network requests are read while git works.
+ * Runs git off the event loop, so the signer's network requests are read while
+ * git works.
  *
  * Output is captured rather than inherited, so a routine miss — a source lookup
  * tries each candidate directory in turn — never prints a raw `fatal:` into the
  * signer's terminal mid-ceremony. The rejection still carries the failure.
  *
- * @param repoRoot - the clone whose `origin` is read and fetched
+ * @param repoRoot - the clone git runs in; defaults to this checkout
  * @param timeoutMs - how long one git call may run before it is killed and fails
- * @returns The git seam every pinned read goes through
+ * @returns A runner taking git's arguments and resolving to its stdout
+ * @throws When git exits non-zero, times out or overflows its buffer
  */
-export const createPinnedStateGit = (
-  repoRoot: string,
+export const createPinnedGitRunner = (
+  repoRoot: string = REPO_ROOT,
   timeoutMs: number = PINNED_GIT_TIMEOUT_MS
-): IPinnedStateGit => {
-  const git = async (args: string[]): Promise<string> => {
+): ((args: string[]) => Promise<string>) => {
+  return async (args: string[]): Promise<string> => {
     const pending = execFileAsync('git', args, {
       cwd: repoRoot,
       encoding: 'utf8',
@@ -617,6 +618,20 @@ export const createPinnedStateGit = (
     pending.child.stdin?.end()
     return (await pending).stdout
   }
+}
+
+/**
+ * The git reads the pinned anchor is taken through.
+ *
+ * @param repoRoot - the clone whose `origin` is read and fetched
+ * @param timeoutMs - how long one git call may run before it is killed and fails
+ * @returns The git seam every pinned read goes through
+ */
+export const createPinnedStateGit = (
+  repoRoot: string,
+  timeoutMs: number = PINNED_GIT_TIMEOUT_MS
+): IPinnedStateGit => {
+  const git = createPinnedGitRunner(repoRoot, timeoutMs)
   return {
     // `get-url` rather than `config remote.origin.url`, because it applies any
     // insteadOf rewrite and so reports where a fetch would actually go.
