@@ -2,9 +2,7 @@
   "$schema": "deployment-profile-corrections/v1",
   "generatedAt": "2026-08-31T07:18:05.652Z",
   "method": "Rebuilt each record's own commit at the compiler its deployed bytecode declares; kept the commit, corrected only the contradicted fields.",
-  "excluded": [
-    "tron/SymbiosisFacet@2.0.0"
-  ],
+  "excluded": ["tron/SymbiosisFacet@2.0.0"],
   "count": 14,
   "corrections": [
     {

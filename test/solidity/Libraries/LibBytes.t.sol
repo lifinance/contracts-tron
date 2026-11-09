@@ -37,9 +37,11 @@ contract LibBytesHarness {
         return LibBytes.toAddress(_value);
     }
 
-    function toAddressUnchecked(
-        bytes32 _value
-    ) external pure returns (address) {
+    function toAddressUnchecked(bytes32 _value)
+        external
+        pure
+        returns (address)
+    {
         return LibBytes.toAddressUnchecked(_value);
     }
 }
@@ -127,8 +129,8 @@ contract LibBytesTest is Test {
 
     function testRevert_toAddress_bytes32_HighBitsSet() public {
         bytes32 dirty = bytes32(
-            (uint256(1) << 160) |
-                uint160(0x1234567890AbcdEF1234567890aBcdef12345678)
+            (uint256(1) << 160)
+                | uint160(0x1234567890AbcdEF1234567890aBcdef12345678)
         );
 
         vm.expectRevert(

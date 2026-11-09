@@ -11,8 +11,9 @@ contract OFTComposeMsgCodecImplementer {
         uint256 _amountLD,
         bytes memory _composeMsg
     ) external pure returns (bytes memory) {
-        return
-            OFTComposeMsgCodec.encode(_nonce, _srcEid, _amountLD, _composeMsg);
+        return OFTComposeMsgCodec.encode(
+            _nonce, _srcEid, _amountLD, _composeMsg
+        );
     }
 
     function nonce(bytes calldata _msg) external pure returns (uint64) {
@@ -51,8 +52,7 @@ contract OFTComposeMsgCodecTest is TestBaseLocal {
         uint256 _amountLD
     ) internal view returns (bytes memory) {
         bytes memory composeMsg = abi.encodePacked(
-            COMPOSE_FROM,
-            COMPOSE_MSG_PAYLOAD
+            COMPOSE_FROM, COMPOSE_MSG_PAYLOAD
         );
         return codec.encode(_nonce, _srcEid, _amountLD, composeMsg);
     }

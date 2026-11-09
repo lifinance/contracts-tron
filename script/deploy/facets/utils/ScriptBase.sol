@@ -70,10 +70,9 @@ contract ScriptBase is Script, DSTest {
         if (allowNonContractAddress) return contractAddress;
 
         // check if address contains code
-        if (!LibAsset.isContract(contractAddress))
-            revert(
-                string.concat(key, " in file ", path, " is not a contract")
-            );
+        if (!LibAsset.isContract(contractAddress)) {
+            revert(string.concat(key, " in file ", path, " is not a contract"));
+        }
 
         return contractAddress;
     }
