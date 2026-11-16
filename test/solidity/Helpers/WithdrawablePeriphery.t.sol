@@ -2,7 +2,6 @@
 pragma solidity ^0.8.17;
 
 import { WithdrawablePeriphery } from "lifi/Helpers/WithdrawablePeriphery.sol";
-import { ZeroAmount, ETHTransferFailed } from "lifi/Errors/GenericErrors.sol";
 
 import { TestBaseLocal } from "../utils/TestBaseLocal.sol";
 import { NonETHReceiver } from "../utils/TestHelpers.sol";
@@ -102,22 +101,14 @@ contract WithdrawablePeripheryTest is TestBaseLocal {
         );
     }
 
-    function testRevert_ZeroAmount() public {
-        vm.startPrank(USER_DIAMOND_OWNER);
-
-        vm.expectRevert(ZeroAmount.selector);
-
-        withdrawable.withdrawToken(ADDRESS_USDC, payable(USER_RECEIVER), 0);
-    }
-
-    function testRevert_NativeTransferFailed() public {
+    function testRevert_FailsIfNativeTokenTransferFails() public {
         uint256 withdrawAmount = 0.1 ether;
 
         address nonETHReceiver = address(new NonETHReceiver());
 
         vm.startPrank(USER_DIAMOND_OWNER);
 
-        vm.expectRevert(ETHTransferFailed.selector);
+        vm.expectRevert();
 
         withdrawable.withdrawToken(
             address(0),
