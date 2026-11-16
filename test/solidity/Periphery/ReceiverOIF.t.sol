@@ -10,7 +10,8 @@ import {
     UnAuthorized,
     InvalidConfig,
     InvalidReceiver,
-    InvalidAmount
+    InvalidAmount,
+    ETHTransferFailed
 } from "lifi/Errors/GenericErrors.sol";
 import { ERC20Proxy } from "lifi/Periphery/ERC20Proxy.sol";
 import { MandateOutput } from "lifi/Interfaces/IOpenIntentFramework.sol";
@@ -103,14 +104,15 @@ contract ReceiverOIFTest is TestBase {
         assertEq(USER_RECEIVER.balance, initialBalance + 1 ether);
     }
 
-    function test_WithdrawTokenWillRevertIfExternalCallFails() public {
+    function testRevert_NativeTransferFailed() public {
         vm.deal(address(receiver), 1 ether);
 
         // deploy contract that cannot receive ETH
         NonETHReceiver nonETHReceiver = new NonETHReceiver();
 
         vm.startPrank(USER_DIAMOND_OWNER);
-        vm.expectRevert(abi.encodeWithSignature("ExternalCallFailed()"));
+
+        vm.expectRevert(ETHTransferFailed.selector);
 
         receiver.withdrawToken(
             address(0), payable(address(nonETHReceiver)), 1 ether
