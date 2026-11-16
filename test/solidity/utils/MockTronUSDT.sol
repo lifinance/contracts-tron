@@ -35,8 +35,9 @@ contract MockTronUSDT {
 
     // No return type declared — mirrors real Tron USDT's transferFrom which returns 0 bytes.
     function transferFrom(address from, address to, uint256 amount) external {
-        if (allowance[from][msg.sender] < amount)
+        if (allowance[from][msg.sender] < amount) {
             revert InsufficientAllowance();
+        }
         if (balanceOf[from] < amount) revert InsufficientBalance();
         allowance[from][msg.sender] -= amount;
         balanceOf[from] -= amount;
