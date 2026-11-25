@@ -14,8 +14,8 @@
 #   every bare import in script TS files must resolve to a package declared
 #   in package.json (catches "dependency removed while still imported"
 #   even when no .ts file was touched)
-# - Path-gated: the heavy job runs only when scripts or dependency manifests
-#   change, or when a src/, config/ or deployments/ file they may import is
+# - Path-gated: the heavy job runs only when any TS/JS file or a dependency
+#   manifest changes, or when a src/, config/ or deployments/ file they may import is
 #   removed or renamed. A `validate-scripts-required` aggregator job always reports a
 #   final status so this workflow can be registered as a required check on
 #   `main` branch protection (see .agents/rules/500-github-actions.md)
@@ -73,8 +73,9 @@ jobs:
         with:
           filters: |
             scripts:
-              - 'script/**/*.{ts,tsx,mts,cts,js,mjs,cjs}'
-              - 'tasks/**/*.{ts,tsx,mts,cts,js,mjs,cjs}'
+              # Any TS/JS, not only script/ and tasks/: `bun lint:js` lints the
+              # whole tree (e.g. plopfile.mjs, .setup.js)
+              - '**/*.{ts,tsx,mts,cts,js,mjs,cjs}'
               - 'script/utils/typecheck-files.sh'
               - 'package.json'
               - 'bun.lock'
@@ -136,18 +137,13 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
-      # The Node-runtime fence launches with `node --import`, so it needs a Node the
-      # runner image does not choose (and without Node, Bun's shim would run it instead).
-      - name: Set up Node
-        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
-        with:
-          node-version-file: .nvmrc
-
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: package.json
 
+      # The Node-runtime fence launches with `node --import`, so it needs a Node the
+      # runner image does not choose (and without Node, Bun's shim would run it instead).
       - name: Set up Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
